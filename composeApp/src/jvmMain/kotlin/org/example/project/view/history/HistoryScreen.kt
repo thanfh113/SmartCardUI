@@ -22,8 +22,15 @@ import java.util.Locale
 @Composable
 fun HistoryScreen() {
     val repo = CardRepositoryProvider.current
-    val accessLogs = repo.getAccessLogs()
-    val transactions = repo.getTransactions()
+
+    // --- SỬA Ở ĐÂY: Sắp xếp giảm dần theo thời gian (Mới nhất lên đầu) ---
+    val accessLogs = remember {
+        repo.getAccessLogs().sortedByDescending { it.time }
+    }
+    val transactions = remember {
+        repo.getTransactions().sortedByDescending { it.time }
+    }
+    // ----------------------------------------------------------------------
 
     val dateFormatter = remember { DateTimeFormatter.ofPattern("HH:mm dd/MM") }
     val currencyFormatter = remember { NumberFormat.getNumberInstance(Locale("vi", "VN")) }
@@ -50,7 +57,6 @@ fun HistoryScreen() {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(accessLogs) { log ->
-                        // Xác định icon
                         val icon = if (log.accessType.name.contains("IN")) Icons.Default.Login else Icons.Default.Logout
 
                         Card(
@@ -87,9 +93,8 @@ fun HistoryScreen() {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(transactions) { tx ->
-                        // Logic hiển thị giao dịch
                         val isTopUp = tx.type == TransactionType.TOP_UP
-                        val amountColor = if (isTopUp) Color(0xFF2E7D32) else Color(0xFFC62828) // Xanh / Đỏ
+                        val amountColor = if (isTopUp) Color(0xFF2E7D32) else Color(0xFFC62828)
                         val sign = if (isTopUp) "+" else "-"
                         val icon = if (isTopUp) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward
 

@@ -15,7 +15,7 @@ object ImageUtils {
     // Kích thước tối đa cho phép trên thẻ (8KB)
     private const val MAX_CARD_IMAGE_SIZE = 8192
 
-    // Kích thước pixel ảnh hiển thị (128x128 là đẹp nhất cho 8KB)
+    // Kích thước pixel ảnh hiển thị
     private const val TARGET_WIDTH = 128
     private const val TARGET_HEIGHT = 128
 

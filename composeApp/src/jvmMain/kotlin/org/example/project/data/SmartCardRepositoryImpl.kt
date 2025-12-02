@@ -193,7 +193,7 @@ class SmartCardRepositoryImpl(
         }
     }
 
-    // 🔓 Hàm giải mã AES (Mới thêm vào)
+    // 🔓 Hàm giải mã AES
     private fun decryptAes(data: ByteArray): ByteArray {
         return try {
             if (data.isEmpty()) return ByteArray(0)
@@ -237,9 +237,19 @@ class SmartCardRepositoryImpl(
     }
 
     private fun getPinTriesRemaining(): Int {
-        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_GET_RETRY, 0x00, 0x00, 0x00))
+        // --- SỬA LỖI TẠI ĐÂY ---
+        // Thay byte cuối cùng (Le) từ 0x00 thành 0x01
+        // Để khớp với apdu.setOutgoingAndSend((short) 0, (short) 1) trong Applet
+        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_GET_RETRY, 0x00, 0x00, 0x01))
+
+        // Kiểm tra thành công (90 00)
+        if (!isSw9000(resp)) {
+            // Nếu lỗi, trả về 0 để an toàn (coi như hết lượt thử) thay vì 3
+            return 0
+        }
+
         val d = dataPart(resp)
-        return if (d.isNotEmpty()) d[0].toInt() and 0xFF else 3
+        return if (d.isNotEmpty()) d[0].toInt() and 0xFF else 0
     }
 
     override fun verifyPin(input: String): Boolean {

@@ -74,7 +74,7 @@ fun AccessControlScreen(
                 }
             )
 
-            // Nút Phòng Đặc Biệt (Sửa lại tên, màu và icon)
+            // Nút Phòng Đặc Biệt
             AccessActionCard(
                 title = "Phòng Đặc Biệt",
                 subtitle = "Quyền riêng tư cao", // Slogan nghe nhẹ nhàng hơn

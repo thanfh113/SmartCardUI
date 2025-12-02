@@ -45,27 +45,42 @@ fun DesktopApp() {
     var isCardGenuine by remember { mutableStateOf<Boolean?>(null) }
     var connectionError by remember { mutableStateOf<String?>(null) }
     var isConnected by remember { mutableStateOf(false) }
+
+    // State quản lý trạng thái thẻ (PIN, Khóa, Số dư)
     var cardState by remember { mutableStateOf(repo.getCardState()) }
 
-    fun refreshCardState() { cardState = repo.getCardState() }
+    // Hàm ép cập nhật lại trạng thái thẻ từ phần cứng
+    fun refreshCardState() {
+        // Lấy state mới từ repo
+        val newState = repo.getCardState()
+        // QUAN TRỌNG: .copy() tạo ra một instance mới để Compose nhận biết thay đổi và vẽ lại UI
+        // Nếu không có .copy(), Compose có thể nghĩ object chưa đổi và không cập nhật dòng chữ đỏ.
+        cardState = newState.copy()
+    }
 
     // Dialog state
     var showPinDialog by remember { mutableStateOf(false) }
     var showActionPinDialog by remember { mutableStateOf(false) }
     var pendingAction: (() -> Unit)? by remember { mutableStateOf(null) }
 
-    // --- LOGIC XỬ LÝ PIN (Giữ nguyên) ---
+    // --- LOGIC XỬ LÝ PIN (Đã sửa để cập nhật UI khi nhập sai) ---
     if (showPinDialog) {
         PinDialog(
             title = "Mở khóa thẻ",
-            cardState = cardState,
-            onDismiss = { /* Bắt buộc nhập */ },
+            cardState = cardState, // Truyền state mới nhất vào đây
+            onDismiss = { /* Bắt buộc nhập, không cho tắt */ },
             onPinOk = { pin ->
-                if (repo.verifyPin(pin)) {
-                    refreshCardState()
+                // 1. Gọi verify
+                val ok = repo.verifyPin(pin)
+
+                // 2. Cập nhật lại số lần sai NGAY LẬP TỨC
+                refreshCardState()
+
+                // 3. Nếu đúng thì vào app, sai thì Dialog tự hiển thị lỗi đỏ (nhờ cardState đã update)
+                if (ok) {
                     isAuthenticated = true
                     showPinDialog = false
-                    currentScreen = MainScreen.EMPLOYEE_INFO // Tự động chuyển màn hình
+                    currentScreen = MainScreen.EMPLOYEE_INFO
                 }
             }
         )
@@ -77,8 +92,9 @@ fun DesktopApp() {
             cardState = cardState,
             onDismiss = { showActionPinDialog = false },
             onPinOk = { pin ->
-                if (repo.verifyPin(pin)) {
-                    refreshCardState()
+                val ok = repo.verifyPin(pin)
+                refreshCardState() // Cập nhật số lần sai
+                if (ok) {
                     showActionPinDialog = false
                     pendingAction?.invoke()
                     pendingAction = null
@@ -156,8 +172,9 @@ fun DesktopApp() {
                         }
 
                         // Thẻ xịn -> Hiện dialog PIN
-                        showPinDialog = true
+                        // Lấy trạng thái thẻ (số lần thử còn lại) trước khi hiện Dialog
                         refreshCardState()
+                        showPinDialog = true
                     }
                 )
             } else {

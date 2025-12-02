@@ -3,6 +3,7 @@ package org.example.project.view.common
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -18,6 +19,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import org.example.project.model.CardState
+import kotlin.system.exitProcess // ✅ Import thư viện để thoát app
 
 @Composable
 fun PinDialog(
@@ -27,16 +29,24 @@ fun PinDialog(
     onPinOk: (String) -> Unit
 ) {
     var pinText by remember { mutableStateOf("") }
-    // State quản lý ẩn/hiện mật khẩu
     var passwordVisible by remember { mutableStateOf(false) }
 
-    val isError = cardState.pinTriesRemaining < cardState.maxPinTries
+    // Logic tính toán lỗi
+    val maxTries = cardState.maxPinTries
+    val currentTries = cardState.pinTriesRemaining
+    val wrongCount = maxTries - currentTries
+
+    // Có lỗi nếu số lần còn lại < tối đa và thẻ chưa bị khóa
+    val isError = currentTries < maxTries && !cardState.isBlocked
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            // Nếu bị khóa mà bấm ra ngoài dialog thì cũng thoát luôn cho chắc (tùy chọn)
+            if (cardState.isBlocked) exitProcess(0) else onDismiss()
+        },
         icon = {
             Icon(
-                if (cardState.isBlocked) Icons.Default.Warning else Icons.Default.Lock,
+                imageVector = if (cardState.isBlocked) Icons.Default.Warning else Icons.Default.Lock,
                 contentDescription = null,
                 modifier = Modifier.size(48.dp),
                 tint = if (cardState.isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
@@ -47,12 +57,13 @@ fun PinDialog(
                 text = if (cardState.isBlocked) "THẺ ĐÃ BỊ KHÓA" else title,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                color = if (cardState.isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
             )
         },
         text = {
             Column(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -62,56 +73,88 @@ fun PinDialog(
                         onValueChange = { if (it.length <= 8 && it.all { c -> c.isDigit() }) pinText = it },
                         label = { Text("Nhập mã PIN") },
                         singleLine = true,
-                        // Logic chuyển đổi chế độ hiển thị
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         isError = isError,
                         modifier = Modifier.fillMaxWidth(),
                         shape = MaterialTheme.shapes.medium,
-                        // Icon con mắt ở cuối
                         trailingIcon = {
-                            val image = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
-                            val description = if (passwordVisible) "Ẩn PIN" else "Hiện PIN"
-
                             IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(imageVector = image, contentDescription = description)
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle PIN"
+                                )
+                            }
+                        },
+                        supportingText = {
+                            if (isError) {
+                                Text(
+                                    text = "Mã PIN sai! Còn lại $currentTries/$maxTries lần thử.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.Medium
+                                )
                             }
                         }
                     )
                 }
 
-                // Hiển thị số lần còn lại
-                if (isError || cardState.isBlocked) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = MaterialTheme.shapes.small
+                if (cardState.isBlocked) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = if (cardState.isBlocked)
-                                "Vui lòng liên hệ quản trị viên để mở khóa."
-                            else
-                                "Sai mã PIN! Còn lại ${cardState.pinTriesRemaining}/${cardState.maxPinTries} lần thử.",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            text = "Bạn đã nhập sai quá số lần quy định. Vui lòng liên hệ quản trị viên để mở khóa.",
+                            modifier = Modifier.padding(16.dp),
                             style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(8.dp),
                             textAlign = TextAlign.Center
                         )
                     }
+                }
+                else if (isError) {
+                    Text(
+                        text = "Đã nhập sai $wrongCount lần.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         },
         confirmButton = {
             Button(
+                // Khóa nút xác nhận khi thẻ bị Block
                 enabled = !cardState.isBlocked && pinText.isNotEmpty(),
-                onClick = { onPinOk(pinText); pinText = "" },
-                modifier = Modifier.fillMaxWidth()
+                onClick = {
+                    onPinOk(pinText)
+                    pinText = ""
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                )
             ) {
-                Text("Xác nhận")
+                Text(if (isError) "Thử lại" else "Xác nhận")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                Text("Hủy bỏ")
+            // ✅ SỬA Ở ĐÂY: Logic nút Hủy bỏ
+            TextButton(
+                onClick = {
+                    if (cardState.isBlocked) {
+                        // Nếu thẻ bị khóa -> Thoát App luôn
+                        exitProcess(0)
+                    } else {
+                        // Nếu chưa khóa -> Đóng dialog bình thường
+                        onDismiss()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Đổi chữ hiển thị cho ngầu
+                Text(if (cardState.isBlocked) "Thoát" else "Hủy bỏ")
             }
         },
         containerColor = MaterialTheme.colorScheme.surface,
