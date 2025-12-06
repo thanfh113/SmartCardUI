@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -64,24 +65,17 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
 @Composable
 fun EmployeeScreen(
     vm: EmployeeViewModel = remember { EmployeeViewModel() },
-    onChangePin: ((() -> Unit) -> Unit)? = null,
-    isAuthenticated: Boolean = false
+    onChangePin: ((() -> Unit) -> Unit)? = null, // vẫn giữ để không phá API cũ
+    isAuthenticated: Boolean = false,
 ) {
     LaunchedEffect(isAuthenticated) { if (isAuthenticated) vm.loadAvatarFromCard() }
 
-    val emp = vm.employee
+    val emp = vm.employee // luôn cập nhật từ viewmodel
 
-    // State local để edit
-    var name by remember { mutableStateOf(emp.name) }
-    var dob by remember { mutableStateOf(emp.dob) }
-    var dept by remember { mutableStateOf(emp.department) }
-    var pos by remember { mutableStateOf(emp.position) }
-
-    // State quản lý Dialog đổi PIN
     var showChangePinDialog by remember { mutableStateOf(false) }
+    var showChangeProfileDialog by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
 
-    // --- HIỂN THỊ DIALOG ĐỔI PIN NẾU ĐƯỢC KÍCH HOẠT ---
     if (showChangePinDialog) {
         ChangePinDialog(
             onClose = { showChangePinDialog = false },
@@ -91,166 +85,253 @@ fun EmployeeScreen(
         )
     }
 
-    Row(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
+    if (showChangeProfileDialog) {
+        ChangeProfileDialog(
+            vm = vm,
+            isAuthenticated = isAuthenticated,
+            onClose = { showChangeProfileDialog = false }
+        )
+    }
+
+    // --- GIAO DIỆN MỚI ---
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // --- CỘT TRÁI: THẺ ĐỊNH DANH (Profile Card) ---
-        Card(
-            modifier = Modifier.width(300.dp).fillMaxHeight(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        // Header "Employee Profile"
+        Text(
+            text = "Employee Profile",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        // ----- Visual ID Card đưa lên ngay sau header -----
+        VisualEmployeeIdCard(
+            avatarBitmap = vm.avatarBitmap,
+            name = emp.name,
+            id = emp.id,
+            dob = emp.dob,
+            dept = emp.department,
+            pos = emp.position
+        )
+
+        // ----- Hai nút ở dưới card -----
+        Button(
+            onClick = {
+                showChangeProfileDialog = true
+            },
+            modifier = Modifier
+                .fillMaxWidth(0.4f)
+                .height(48.dp),
+            shape = MaterialTheme.shapes.medium
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp).fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            Text("Change Profile")
+        }
+
+        OutlinedButton(
+            onClick = { showChangePinDialog = true },
+            modifier = Modifier
+                .fillMaxWidth(0.4f)
+                .height(48.dp),
+            shape = MaterialTheme.shapes.medium
+        ) {
+            Text("Change PIN")
+        }
+
+        // Thông báo lưu / đổi PIN thành công (giữ nguyên)
+        if (saveMessage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = Color(0xFFE0F7EC),
+                        shape = MaterialTheme.shapes.medium
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Avatar lớn
-                Box(contentAlignment = Alignment.BottomEnd) {
-                    EditableAvatar(
-                        currentBitmap = vm.avatarBitmap,
-                        fallbackName = name,
-                        onPickImage = {
-                            pickFile()?.let { vm.uploadAvatar(it) }
-                        }
-                    )
-                }
-
-                Divider(Modifier.padding(vertical = 8.dp))
-
-                // Tên & ID
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = name.ifBlank { "Chưa nhập tên" },
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "ID: ${emp.id}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                // Info tóm tắt
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = pos.ifBlank { "Chưa có chức vụ" },
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = dept.ifBlank { "Chưa có phòng ban" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                // Các nút hành động
-                Button(
-                    onClick = {
-                        vm.updateEmployee(name, dob, dept, pos)
-                        saveMessage = "Đã lưu thông tin!"
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Lưu thay đổi")
-                }
-
-                // Nút mở Dialog Đổi PIN
-                OutlinedButton(
-                    onClick = { showChangePinDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Icon(Icons.Default.LockReset, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Đổi mã PIN")
-                }
-
-                if (saveMessage != null) {
-                    Text(
-                        saveMessage!!,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelMedium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF1BAA61)
+                )
+                Text(
+                    text = saveMessage!!,
+                    color = Color(0xFF1BAA61),
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
         }
 
-        // --- CỘT PHẢI: FORM CHỈNH SỬA (Detailed Info) ---
-        Card(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+/**
+ * Card phía dưới “Visual Employee ID Card”
+ * – Bên trái là ảnh (hoặc placeholder)
+ * – Bên phải là các trường: Full Name, ID Number, Date of Birth, Department, Position
+ */
+@Composable
+fun VisualEmployeeIdCard(
+    avatarBitmap: ImageBitmap?,
+    name: String,
+    id: String,
+    dob: String,
+    dept: String,
+    pos: String
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth(0.7f)
+            .border(
+                width = 2.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                shape = MaterialTheme.shapes.large
+            )
+            .heightIn(min = 260.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = MaterialTheme.shapes.large
+    ){
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(32.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "Thông tin chi tiết",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                // Grid Layout cho Form
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    InfoField(
-                        value = emp.id,
-                        onValueChange = {},
-                        label = "Mã nhân viên",
-                        icon = Icons.Default.Badge,
-                        enabled = false,
-                        modifier = Modifier.weight(1f)
-                    )
-                    InfoField(
-                        value = name,
-                        onValueChange = { name = it; saveMessage = null },
-                        label = "Họ và tên",
-                        icon = Icons.Default.Person,
-                        modifier = Modifier.weight(1f)
-                    )
+                // Ảnh chữ nhật bên trái
+                Box(
+                    modifier = Modifier
+                        .width(150.dp)
+                        .height(170.dp)
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (avatarBitmap != null) {
+                        Image(
+                            bitmap = avatarBitmap,
+                            contentDescription = "Employee photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text(
+                            text = name
+                                .split(" ")
+                                .filter { it.isNotBlank() }
+                                .takeLast(2)
+                                .joinToString("") { it.first().uppercase() }
+                                .ifBlank { "NV" },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    InfoField(
-                        value = dob,
-                        onValueChange = { dob = it; saveMessage = null },
-                        label = "Ngày sinh (DD/MM/YYYY)",
-                        icon = Icons.Default.Cake,
-                        modifier = Modifier.weight(1f)
+                // Các trường ở bên phải (Name, ID, DOB) – CHỈ HIỂN THỊ
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StaticInfoLine(
+                        label = "Full Name",
+                        value = name
                     )
-                    InfoField(
-                        value = dept,
-                        onValueChange = { dept = it; saveMessage = null },
-                        label = "Phòng ban",
-                        icon = Icons.Default.Apartment,
-                        modifier = Modifier.weight(1f)
+                    StaticInfoLine(
+                        label = "ID Number",
+                        value = id
+                    )
+                    StaticInfoLine(
+                        label = "Date of Birth",
+                        value = dob
                     )
                 }
+            }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    InfoField(
-                        value = pos,
-                        onValueChange = { pos = it; saveMessage = null },
-                        label = "Chức vụ",
-                        icon = Icons.Default.Work,
-                        modifier = Modifier.weight(1f)
+            Divider()
+
+            // Department & Position hàng dưới – CHỈ HIỂN THỊ
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    StaticInfoLine(
+                        label = "Department",
+                        value = dept
                     )
-                    Spacer(Modifier.weight(1f))
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    StaticInfoLine(
+                        label = "Position",
+                        value = pos
+                    )
                 }
             }
         }
     }
 }
+
+
+@Composable
+private fun EditableInfoLine(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyLarge,
+            shape = MaterialTheme.shapes.small,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+            )
+        )
+    }
+}
+
+@Composable
+private fun StaticInfoLine(
+    label: String,
+    value: String
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
 
 // --- LOGIC DIALOG ĐỔI PIN (CÓ HIỆN MẬT KHẨU) ---
 @Composable
@@ -343,50 +424,45 @@ fun PinInputField(
 ) {
     var passwordVisible by remember { mutableStateOf(false) }
 
-    OutlinedTextField(
-        value = value,
-        onValueChange = { if (it.all { char -> char.isDigit() }) onValueChange(it) }, // Chỉ cho nhập số
-        label = { Text(label) },
-        singleLine = true,
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-        trailingIcon = {
-            val image = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
-            val description = if (passwordVisible) "Hide password" else "Show password"
-
-            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                Icon(imageVector = image, contentDescription = description)
-            }
-        }
-    )
-}
-
-// Component trường nhập liệu thông tin (Profile)
-@Composable
-fun InfoField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    icon: ImageVector,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        leadingIcon = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-        enabled = enabled,
-        singleLine = true,
-        modifier = modifier,
-        shape = MaterialTheme.shapes.small,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    )
+
+        OutlinedTextField(
+            value = value,
+            onValueChange = { if (it.all { c -> c.isDigit() }) onValueChange(it) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyLarge,
+            shape = RoundedCornerShape(12.dp),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                val desc = if (passwordVisible) "Hide password" else "Show password"
+
+                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                    Icon(icon, contentDescription = desc)
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.outline,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        )
+    }
 }
+
 
 @Composable
 fun EditableAvatar(
