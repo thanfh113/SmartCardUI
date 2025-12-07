@@ -23,6 +23,8 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(compose.material3)
             implementation(compose.materialIconsExtended)
+            implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+            implementation("org.slf4j:slf4j-simple:2.0.7")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

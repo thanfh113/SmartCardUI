@@ -10,6 +10,7 @@ object MockCardRepository : CardRepository {
     private val maxPinTries = 3
     private var pinTriesRemaining = maxPinTries
     private var isBlocked = false
+    private var isCardSetup = false
 
     private var balance: Double = 100_000.0
 
@@ -43,6 +44,18 @@ object MockCardRepository : CardRepository {
             isBlocked = isBlocked,
             balance = balance
         )
+
+    // ✅ MỚI: Implement hàm check
+    override fun checkCardInitialized(): Boolean {
+        return isCardSetup
+    }
+
+    // ✅ MỚI: Implement hàm setup
+    override fun setupFirstPin(newPin: String): Boolean {
+        pin = newPin
+        isCardSetup = true
+        return true
+    }
 
     override fun verifyPin(input: String): Boolean {
         if (isBlocked) return false

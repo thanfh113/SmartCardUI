@@ -31,6 +31,8 @@ fun PinDialog(
     var pinText by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
+    var isLoading by remember { mutableStateOf(false) }
+
     // Logic tính toán lỗi
     val maxTries = cardState.maxPinTries
     val currentTries = cardState.pinTriesRemaining
@@ -67,7 +69,12 @@ fun PinDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                if (!cardState.isBlocked) {
+                if (isLoading) {
+                    // ✅ HIỂN THỊ KHI ĐANG TÍNH ARGON2
+                    CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                    Text("Đang xác thực bảo mật...", style = MaterialTheme.typography.bodySmall)
+                } else if (!cardState.isBlocked) {
+                    // (Giữ nguyên code OutlinedTextField cũ)
                     OutlinedTextField(
                         value = pinText,
                         onValueChange = { if (it.length <= 8 && it.all { c -> c.isDigit() }) pinText = it },
@@ -77,22 +84,17 @@ fun PinDialog(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         isError = isError,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
                         trailingIcon = {
                             IconButton(onClick = { passwordVisible = !passwordVisible }) {
                                 Icon(
                                     imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle PIN"
+                                    contentDescription = null
                                 )
                             }
                         },
                         supportingText = {
                             if (isError) {
-                                Text(
-                                    text = "Mã PIN sai! Còn lại $currentTries/$maxTries lần thử.",
-                                    color = MaterialTheme.colorScheme.error,
-                                    fontWeight = FontWeight.Medium
-                                )
+                                Text("PIN sai! Còn lại $currentTries/$maxTries lần.", color = MaterialTheme.colorScheme.error)
                             }
                         }
                     )
@@ -126,8 +128,9 @@ fun PinDialog(
         confirmButton = {
             Button(
                 // Khóa nút xác nhận khi thẻ bị Block
-                enabled = !cardState.isBlocked && pinText.isNotEmpty(),
+                enabled = !cardState.isBlocked && pinText.isNotEmpty() && !isLoading,
                 onClick = {
+                    isLoading = true
                     onPinOk(pinText)
                     pinText = ""
                 },
@@ -142,6 +145,7 @@ fun PinDialog(
         dismissButton = {
             // ✅ SỬA Ở ĐÂY: Logic nút Hủy bỏ
             TextButton(
+                enabled = !isLoading,
                 onClick = {
                     if (cardState.isBlocked) {
                         // Nếu thẻ bị khóa -> Thoát App luôn
@@ -159,5 +163,7 @@ fun PinDialog(
         },
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 6.dp
+
     )
+    LaunchedEffect(cardState) { isLoading = false }
 }

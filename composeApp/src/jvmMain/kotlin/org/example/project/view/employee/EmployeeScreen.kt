@@ -32,6 +32,9 @@ import org.example.project.data.CardRepositoryProvider
 import org.example.project.utils.ImageUtils
 import java.awt.FileDialog
 import java.awt.Frame
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // --- VIEW MODEL ---
 class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvider.current) {
@@ -344,10 +347,13 @@ fun ChangePinDialog(
     var confirmPin by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
 
+    var isLoading by remember { mutableStateOf(false) } // ✅ Loading state
+
     val repo = CardRepositoryProvider.current
+    val scope = rememberCoroutineScope() // ✅ Coroutine Scope
 
     AlertDialog(
-        onDismissRequest = onClose,
+        onDismissRequest = { if (!isLoading) onClose() },
         icon = { Icon(Icons.Default.LockReset, null, modifier = Modifier.size(32.dp)) },
         title = { Text("Đổi Mã PIN", textAlign = TextAlign.Center) },
         text = {
@@ -355,53 +361,59 @@ fun ChangePinDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // 3 Ô nhập liệu có nút ẩn/hiện
-                PinInputField(
-                    value = oldPin,
-                    onValueChange = { oldPin = it },
-                    label = "PIN hiện tại"
-                )
-
-                PinInputField(
-                    value = newPin,
-                    onValueChange = { newPin = it },
-                    label = "PIN mới"
-                )
-
-                PinInputField(
-                    value = confirmPin,
-                    onValueChange = { confirmPin = it },
-                    label = "Nhập lại PIN mới"
-                )
+                if (isLoading) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    PinInputField(value = oldPin, onValueChange = { oldPin = it }, label = "PIN hiện tại")
+                    PinInputField(value = newPin, onValueChange = { newPin = it }, label = "PIN mới")
+                    PinInputField(value = confirmPin, onValueChange = { confirmPin = it }, label = "Nhập lại PIN mới")
+                }
 
                 if (message != null) {
-                    Text(
-                        text = message!!,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
+                    Text(message!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
                 }
             }
         },
         confirmButton = {
             Button(
+                enabled = !isLoading,
                 onClick = {
                     if (newPin.length < 4) {
                         message = "PIN phải có ít nhất 4 ký tự."
                     } else if (newPin != confirmPin) {
                         message = "PIN mới không khớp."
                     } else {
-                        // Gọi Repository để đổi PIN
-                        val ok = repo.changePin(oldPin, newPin)
-                        if (ok) {
-                            // QUAN TRỌNG: Verify lại ngay bằng PIN mới để không bị mất session
-                            repo.verifyPin(newPin)
-                            onSuccess()
-                            onClose()
-                        } else {
-                            message = "PIN hiện tại không đúng hoặc thẻ bị lỗi."
+                        isLoading = true
+                        message = null
+
+                        // ✅ LOGIC XỬ LÝ BACKGROUND
+                        scope.launch(Dispatchers.IO) {
+                            // B1: Verify PIN cũ trước
+                            val isOldPinOk = repo.verifyPin(oldPin)
+
+                            if (isOldPinOk) {
+                                // B2: Nếu đúng -> Tiến hành đổi sang PIN mới
+                                val changeOk = repo.changePin(oldPin, newPin)
+
+                                withContext(Dispatchers.Main) {
+                                    isLoading = false
+                                    if (changeOk) {
+                                        // Verify lại lần nữa để đảm bảo session master key mới nhất (optional nhưng nên làm)
+                                        repo.verifyPin(newPin)
+                                        onSuccess()
+                                        onClose()
+                                    } else {
+                                        message = "Lỗi khi ghi dữ liệu xuống thẻ!"
+                                    }
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    isLoading = false
+                                    message = "PIN hiện tại không đúng!"
+                                }
+                            }
                         }
                     }
                 }
@@ -410,7 +422,7 @@ fun ChangePinDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onClose) { Text("Hủy") }
+            TextButton(onClick = onClose, enabled = !isLoading) { Text("Hủy") }
         }
     )
 }
