@@ -25,6 +25,10 @@ import org.example.project.view.common.PinDialog
 import org.example.project.view.employee.EmployeeScreen
 import org.example.project.view.history.HistoryScreen
 import kotlin.system.exitProcess
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.example.project.view.common.CreatePinDialog
 
 enum class MainScreen(val title: String, val icon: ImageVector) {
     SCAN("Kết nối", Icons.Default.SettingsInputAntenna),
@@ -38,6 +42,7 @@ enum class MainScreen(val title: String, val icon: ImageVector) {
 @Composable
 fun DesktopApp() {
     val repo = CardRepositoryProvider.current
+    val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(MainScreen.SCAN) }
 
     // State quản lý kết nối
@@ -60,27 +65,61 @@ fun DesktopApp() {
 
     // Dialog state
     var showPinDialog by remember { mutableStateOf(false) }
+    var showCreatePinDialog by remember { mutableStateOf(false) }
     var showActionPinDialog by remember { mutableStateOf(false) }
     var pendingAction: (() -> Unit)? by remember { mutableStateOf(null) }
 
+    if (showCreatePinDialog) {
+        CreatePinDialog(
+            onDismiss = {
+                // Nếu bấm hủy thì quay về màn hình chờ, ngắt kết nối
+                showCreatePinDialog = false
+                isConnected = false
+                repo.disconnect()
+            },
+            onConfirm = { newPin ->
+                // Chạy setup dưới background
+                scope.launch(Dispatchers.IO) {
+                    val success = repo.setupFirstPin(newPin)
+
+                    withContext(Dispatchers.Main) {
+                        if (success) {
+                            // Setup xong -> Coi như đăng nhập thành công luôn
+                            isAuthenticated = true
+                            showCreatePinDialog = false
+                            refreshCardState() // Lấy thông tin thẻ mới
+                            currentScreen = MainScreen.EMPLOYEE_INFO
+                        } else {
+                            connectionError = "Lỗi khi kích hoạt thẻ!"
+                            showCreatePinDialog = false
+                            isConnected = false
+                        }
+                    }
+                }
+            }
+        )
+    }
     // --- LOGIC XỬ LÝ PIN (Đã sửa để cập nhật UI khi nhập sai) ---
     if (showPinDialog) {
         PinDialog(
             title = "Mở khóa thẻ",
-            cardState = cardState, // Truyền state mới nhất vào đây
-            onDismiss = { /* Bắt buộc nhập, không cho tắt */ },
+            cardState = cardState,
+            onDismiss = { /* Không cho tắt */ },
             onPinOk = { pin ->
-                // 1. Gọi verify
-                val ok = repo.verifyPin(pin)
+                // ✅ CHẠY TRÊN BACKGROUND THREAD
+                scope.launch(Dispatchers.IO) {
+                    val ok = repo.verifyPin(pin)
 
-                // 2. Cập nhật lại số lần sai NGAY LẬP TỨC
-                refreshCardState()
-
-                // 3. Nếu đúng thì vào app, sai thì Dialog tự hiển thị lỗi đỏ (nhờ cardState đã update)
-                if (ok) {
-                    isAuthenticated = true
-                    showPinDialog = false
-                    currentScreen = MainScreen.EMPLOYEE_INFO
+                    // Cập nhật UI trên Main Thread
+                    withContext(Dispatchers.Main) {
+                        refreshCardState() // Update số lần sai
+                        if (ok) {
+                            isAuthenticated = true
+                            showPinDialog = false
+                            currentScreen = MainScreen.EMPLOYEE_INFO
+                        }
+                        // Nếu sai, PinDialog sẽ tự tắt loading nhờ LaunchedEffect(cardState)
+                    }
                 }
             }
         )
@@ -92,12 +131,18 @@ fun DesktopApp() {
             cardState = cardState,
             onDismiss = { showActionPinDialog = false },
             onPinOk = { pin ->
-                val ok = repo.verifyPin(pin)
-                refreshCardState() // Cập nhật số lần sai
-                if (ok) {
-                    showActionPinDialog = false
-                    pendingAction?.invoke()
-                    pendingAction = null
+                // ✅ CHẠY TRÊN BACKGROUND THREAD
+                scope.launch(Dispatchers.IO) {
+                    val ok = repo.verifyPin(pin)
+
+                    withContext(Dispatchers.Main) {
+                        refreshCardState()
+                        if (ok) {
+                            showActionPinDialog = false
+                            pendingAction?.invoke()
+                            pendingAction = null
+                        }
+                    }
                 }
             }
         )
@@ -171,10 +216,20 @@ fun DesktopApp() {
                             return@WelcomeScreen
                         }
 
-                        // Thẻ xịn -> Hiện dialog PIN
-                        // Lấy trạng thái thẻ (số lần thử còn lại) trước khi hiện Dialog
-                        refreshCardState()
-                        showPinDialog = true
+                        scope.launch(Dispatchers.IO) {
+                            val isInitialized = repo.checkCardInitialized()
+
+                            withContext(Dispatchers.Main) {
+                                if (!isInitialized) {
+                                    // -> Chưa có PIN -> Hiện Dialog tạo mới
+                                    showCreatePinDialog = true
+                                } else {
+                                    // -> Đã có PIN -> Hiện Dialog đăng nhập
+                                    refreshCardState()
+                                    showPinDialog = true
+                                }
+                            }
+                        }
                     }
                 )
             } else {

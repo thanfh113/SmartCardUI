@@ -11,6 +11,8 @@ interface CardRepository {
     // --- Các hàm nghiệp vụ cũ ---
     fun getCardState(): CardState
 
+    fun checkCardInitialized(): Boolean
+    fun setupFirstPin(newPin: String): Boolean
     fun verifyPin(input: String): Boolean
     fun changePin(oldPin: String, newPin: String): Boolean
 

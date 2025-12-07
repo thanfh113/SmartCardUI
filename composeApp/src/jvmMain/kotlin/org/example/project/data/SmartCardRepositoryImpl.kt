@@ -1,5 +1,7 @@
 package org.example.project.data
 
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator
+import org.bouncycastle.crypto.params.Argon2Parameters
 import org.example.project.api.JcideSmartCardApi
 import org.example.project.model.*
 import java.math.BigInteger
@@ -22,9 +24,12 @@ class SmartCardRepositoryImpl(
         // --- INS CODES ---
         private const val INS_CHANGE_PIN: Byte     = 0x21
         private const val INS_GET_RETRY: Byte      = 0x22
-        private const val INS_VERIFY_PIN_ENC: Byte = 0x25
+        private const val INS_VERIFY_PIN: Byte     = 0x25
         private const val INS_AUTHENTICATE: Byte   = 0x26
         private const val INS_GET_PUB_KEY: Byte    = 0x27
+        private const val INS_GET_SALT: Byte       = 0x28
+        private const val INS_SETUP_PIN: Byte     = 0x29
+        private const val INS_CHECK_SETUP: Byte   = 0x2A
 
         private const val INS_READ_INFO: Byte      = 0x30
         private const val INS_UPDATE_INFO: Byte    = 0x31
@@ -43,12 +48,6 @@ class SmartCardRepositoryImpl(
         private const val MAX_APDU_DATA_SIZE = 240
 
         private const val MAX_AVATAR_SIZE = 8192
-
-        // Cấu hình AES Key (Phải khớp với thẻ)
-        private val APP_AES_KEY = byteArrayOf(
-            0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
-            0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F
-        )
 
         // ===== EMP INFO LAYOUT =====
         private const val EMP_INFO_MAX = 128
@@ -81,48 +80,130 @@ class SmartCardRepositoryImpl(
     override fun connect(): Boolean = api.connect()
     override fun disconnect() = api.disconnect()
 
-    // --- 🟢 UPLOAD AVATAR (CÓ MÃ HÓA AES) ---
+    private fun computeArgon2Hash(pin: String, salt: ByteArray): ByteArray {
+        // Memory: 65536 KB, Iterations: 2, Parallelism: 1
+        val builder = Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+            .withVersion(Argon2Parameters.ARGON2_VERSION_13)
+            .withIterations(2)
+            .withMemoryAsKB(65536)
+            .withParallelism(1)
+            .withSalt(salt)
+
+        val params = builder.build()
+
+        val generator = Argon2BytesGenerator()
+        generator.init(params)
+
+        val result = ByteArray(16)
+
+        generator.generateBytes(pin.toCharArray(), result, 0, result.size)
+
+        return result
+    }
+
+    private fun getSaltFromCard(): ByteArray? {
+        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_GET_SALT, 0x00, 0x00, 0x10)) // Le = 16
+        if (!isSw9000(resp)) return null
+        val data = dataPart(resp)
+        return if (data.size == 16) data else null
+    }
+
+    override fun checkCardInitialized(): Boolean {
+        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_CHECK_SETUP, 0x00, 0x00, 0x01))
+        if (!isSw9000(resp)) return false // Default là false hoặc handle error
+        val data = dataPart(resp)
+        return data.isNotEmpty() && data[0] == 0x01.toByte()
+    }
+
+    override fun setupFirstPin(newPin: String): Boolean {
+        // 1. Kiểm tra Salt
+        val salt = getSaltFromCard()
+        if (salt == null) {
+            println("❌ Lỗi: Không lấy được Salt từ thẻ (INS_GET_SALT thất bại).")
+            return false
+        }
+        // 2. Tính Hash
+        val derivedKey = computeArgon2Hash(newPin, salt)
+
+        // 3. Gửi lệnh Setup
+        val apdu = byteArrayOf(0x80.toByte(), INS_SETUP_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
+        val resp = api.sendApdu(apdu)
+
+        val sw1 = resp[resp.size - 2]
+        val sw2 = resp[resp.size - 1]
+        val swHex = String.format("%02X%02X", sw1, sw2)
+
+        if (!isSw9000(resp)) {
+            println("❌ Lỗi APDU: $swHex")
+            // Phân tích lỗi
+            when (swHex) {
+                "6D00" -> println("=> Lỗi: Applet trên thẻ chưa được cập nhật (Không hiểu lệnh 0x29). Hãy nạp lại thẻ!")
+                "6985" -> println("=> Lỗi: Điều kiện không thỏa mãn (Có thể thẻ đã được kích hoạt trước đó rồi).")
+                "6700" -> println("=> Lỗi: Sai độ dài dữ liệu (Wrong Length).")
+            }
+            return false
+        }
+        return true
+    }
+
+    override fun verifyPin(input: String): Boolean {
+        // 1. Lấy Salt từ thẻ
+        val salt = getSaltFromCard() ?: return false
+
+        // 2. Tính Hash Argon2 (Derived Key)
+        val derivedKey = computeArgon2Hash(input, salt)
+
+        // 3. Gửi Hash xuống thẻ để xác thực & Unlock Master Key
+        val apdu = byteArrayOf(0x80.toByte(), INS_VERIFY_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
+        return isSw9000(api.sendApdu(apdu))
+    }
+
+    override fun changePin(oldPin: String, newPin: String): Boolean {
+        val salt = getSaltFromCard() ?: return false
+
+        // Tính Hash cho PIN MỚI
+        val newDerivedKey = computeArgon2Hash(newPin, salt)
+
+        // 3. Gửi lệnh đổi PIN
+        val data = newDerivedKey
+        val apdu = byteArrayOf(0x80.toByte(), INS_CHANGE_PIN, 0x00, 0x00, data.size.toByte()) + data
+        return isSw9000(api.sendApdu(apdu))
+    }
+
     override fun uploadAvatar(imageBytes: ByteArray): Boolean {
-        println("🖼️ Bắt đầu Upload Avatar Encrypted (${imageBytes.size} bytes)...")
+        println("🖼️ Upload Avatar (${imageBytes.size} bytes)...")
         var offset = 0
 
         while (offset < imageBytes.size) {
-            // Cắt chunk (đảm bảo chia hết cho 16 nhờ logic padding ở ImageUtils và MAX_APDU_DATA_SIZE=240)
             val chunkSize = min(MAX_APDU_DATA_SIZE, imageBytes.size - offset)
             val chunk = imageBytes.copyOfRange(offset, offset + chunkSize)
 
-            // 🔐 MÃ HÓA CHUNK TRƯỚC KHI GỬI
-            val encryptedChunk = encryptAes(chunk)
-
-            // Gửi lệnh INS 0x10
+            // Thẻ sẽ nhận chunk -> dùng MasterKey (đã unlock) để mã hóa -> Lưu EEPROM
             val cmd = CommandAPDU(
                 0x00, INS_UPDATE_AVATAR,
                 (offset shr 8) and 0xFF,
                 offset and 0xFF,
-                encryptedChunk
+                chunk // Gửi dữ liệu gốc
             )
 
             val resp = api.sendApdu(cmd.bytes)
             if (!isSw9000(resp)) {
-                println("❌ Upload lỗi tại offset $offset SW=${Integer.toHexString(getSw(resp))}")
+                println("❌ Upload lỗi tại offset $offset")
                 return false
             }
             offset += chunkSize
         }
-        println("✅ Upload thành công!")
         return true
     }
 
-    // --- 🟢 DOWNLOAD AVATAR (CÓ GIẢI MÃ AES) ---
     override fun getAvatar(): ByteArray {
-        println("🖼️ Bắt đầu Download Avatar Encrypted...")
+        println("🖼️ Download Avatar...")
         val fullData = java.io.ByteArrayOutputStream()
         var offset = 0
 
         while (offset < MAX_AVATAR_SIZE) {
             val lenToRead = min(MAX_APDU_DATA_SIZE, MAX_AVATAR_SIZE - offset)
 
-            // Gửi lệnh INS 0x11
             val cmd = CommandAPDU(
                 0x00, INS_DOWNLOAD_AVATAR,
                 (offset shr 8) and 0xFF,
@@ -131,30 +212,18 @@ class SmartCardRepositoryImpl(
             )
 
             val resp = api.sendApdu(cmd.bytes)
-            if (!isSw9000(resp)) {
-                println("⚠️ Dừng download (SW khác 9000) tại offset $offset")
-                break
-            }
+            if (!isSw9000(resp)) break
 
-            val encryptedChunk = dataPart(resp)
-            if (encryptedChunk.isEmpty()) break
+            val chunk = dataPart(resp)
+            if (chunk.isEmpty()) break
 
-            // 🔓 GIẢI MÃ CHUNK NHẬN ĐƯỢC
-            // (Thẻ gửi về dữ liệu đã mã hóa, client phải giải mã để hiển thị)
-            val plainChunk = decryptAes(encryptedChunk)
+            fullData.write(chunk)
+            offset += chunk.size
 
-            fullData.write(plainChunk)
-            offset += encryptedChunk.size // Tăng offset theo kích thước thực nhận
-
-            if (encryptedChunk.size < lenToRead) break
+            if (chunk.size < lenToRead) break
         }
-
-        val result = fullData.toByteArray()
-        println("✅ Đã tải và giải mã: ${result.size} bytes")
-        return result
+        return fullData.toByteArray()
     }
-
-    // --- CÁC HÀM KHÁC (GIỮ NGUYÊN) ---
 
     override fun authenticateCard(): Boolean {
         try {
@@ -162,7 +231,7 @@ class SmartCardRepositoryImpl(
             if (!isSw9000(pubKeyResp)) return false
             val keyData = dataPart(pubKeyResp)
             val modulusLen = 128
-            if (keyData.size < modulusLen + 1) return false
+            if (keyData.size < modulusLen) return false
             val modulus = BigInteger(1, keyData.copyOfRange(0, modulusLen))
             val exponent = BigInteger(1, keyData.copyOfRange(modulusLen, keyData.size))
             val publicKey = KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulus, exponent))
@@ -178,33 +247,6 @@ class SmartCardRepositoryImpl(
             verifier.update(challenge)
             return verifier.verify(signature)
         } catch (e: Exception) { return false }
-    }
-
-    // 🔐 Hàm mã hóa AES
-    private fun encryptAes(data: ByteArray): ByteArray {
-        return try {
-            val keySpec = SecretKeySpec(APP_AES_KEY, "AES")
-            val cipher = Cipher.getInstance("AES/ECB/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec)
-            cipher.doFinal(data)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            ByteArray(0) // Trả về rỗng nếu lỗi
-        }
-    }
-
-    // 🔓 Hàm giải mã AES
-    private fun decryptAes(data: ByteArray): ByteArray {
-        return try {
-            if (data.isEmpty()) return ByteArray(0)
-            val keySpec = SecretKeySpec(APP_AES_KEY, "AES")
-            val cipher = Cipher.getInstance("AES/ECB/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, keySpec)
-            cipher.doFinal(data)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            ByteArray(0)
-        }
     }
 
     private fun isSw9000(resp: ByteArray): Boolean =
@@ -237,34 +279,15 @@ class SmartCardRepositoryImpl(
     }
 
     private fun getPinTriesRemaining(): Int {
-        // --- SỬA LỖI TẠI ĐÂY ---
         // Thay byte cuối cùng (Le) từ 0x00 thành 0x01
-        // Để khớp với apdu.setOutgoingAndSend((short) 0, (short) 1) trong Applet
         val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_GET_RETRY, 0x00, 0x00, 0x01))
 
-        // Kiểm tra thành công (90 00)
         if (!isSw9000(resp)) {
-            // Nếu lỗi, trả về 0 để an toàn (coi như hết lượt thử) thay vì 3
             return 0
         }
 
         val d = dataPart(resp)
         return if (d.isNotEmpty()) d[0].toInt() and 0xFF else 0
-    }
-
-    override fun verifyPin(input: String): Boolean {
-        val dataBlock = ByteArray(16) { 0xFF.toByte() }
-        val rawPin = input.toByteArray(UTF8)
-        System.arraycopy(rawPin, 0, dataBlock, 0, rawPin.size.coerceAtMost(16))
-        val encryptedPin = encryptAes(dataBlock)
-        val apdu = byteArrayOf(0x80.toByte(), INS_VERIFY_PIN_ENC, 0x00, 0x00, encryptedPin.size.toByte()) + encryptedPin
-        return isSw9000(api.sendApdu(apdu))
-    }
-
-    override fun changePin(oldPin: String, newPin: String): Boolean {
-        val data = newPin.encodeToByteArray()
-        val apdu = byteArrayOf(0x80.toByte(), INS_CHANGE_PIN, 0x00, 0x00, data.size.toByte()) + data
-        return isSw9000(api.sendApdu(apdu))
     }
 
     override fun getEmployee(): Employee {
