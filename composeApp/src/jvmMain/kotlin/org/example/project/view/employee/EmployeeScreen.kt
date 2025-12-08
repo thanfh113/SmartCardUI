@@ -70,6 +70,8 @@ fun EmployeeScreen(
     vm: EmployeeViewModel = remember { EmployeeViewModel() },
     onChangePin: ((() -> Unit) -> Unit)? = null, // vẫn giữ để không phá API cũ
     isAuthenticated: Boolean = false,
+    forceEditProfile: Boolean = false,
+    onForceEditConsumed: () -> Unit = {}
 ) {
     LaunchedEffect(isAuthenticated) { if (isAuthenticated) vm.loadAvatarFromCard() }
 
@@ -78,6 +80,13 @@ fun EmployeeScreen(
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeProfileDialog by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(forceEditProfile) {
+        if (forceEditProfile) {
+            showChangeProfileDialog = true
+            onForceEditConsumed()
+        }
+    }
 
     if (showChangePinDialog) {
         ChangePinDialog(

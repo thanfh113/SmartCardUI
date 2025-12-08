@@ -3,12 +3,10 @@ package org.example.project.data
 import org.example.project.model.*
 
 interface CardRepository {
-    // --- Hàm nghiệp vụ mới ---
     fun connect(): Boolean
     fun disconnect()
-    fun authenticateCard(): Boolean // <-- Hàm quan trọng để chống thẻ giả
+    fun authenticateCard(): Boolean
 
-    // --- Các hàm nghiệp vụ cũ ---
     fun getCardState(): CardState
 
     fun checkCardInitialized(): Boolean
@@ -18,6 +16,8 @@ interface CardRepository {
 
     fun getEmployee(): Employee
     fun updateEmployee(newEmployee: Employee)
+
+    fun initEmployeeAfterActivation(): Employee
 
     fun getBalance(): Double
     fun topUp(amount: Double): Boolean

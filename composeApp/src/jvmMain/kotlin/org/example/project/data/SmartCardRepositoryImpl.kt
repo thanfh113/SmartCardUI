@@ -6,11 +6,14 @@ import org.example.project.api.JcideSmartCardApi
 import org.example.project.model.*
 import java.math.BigInteger
 import java.nio.charset.Charset
+import java.nio.ByteBuffer
 import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.RSAPublicKeySpec
+import java.security.SecureRandom
 import java.time.LocalDateTime
+import java.time.ZoneOffset
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 import javax.smartcardio.CommandAPDU
@@ -28,16 +31,18 @@ class SmartCardRepositoryImpl(
         private const val INS_AUTHENTICATE: Byte   = 0x26
         private const val INS_GET_PUB_KEY: Byte    = 0x27
         private const val INS_GET_SALT: Byte       = 0x28
-        private const val INS_SETUP_PIN: Byte     = 0x29
-        private const val INS_CHECK_SETUP: Byte   = 0x2A
+        private const val INS_SETUP_PIN: Byte      = 0x29
+        private const val INS_CHECK_SETUP: Byte    = 0x2A
 
         private const val INS_READ_INFO: Byte      = 0x30
         private const val INS_UPDATE_INFO: Byte    = 0x31
         private const val INS_ADD_ACCESS_LOG: Byte = 0x40
         private const val INS_READ_LOGS: Byte      = 0x41
+
         private const val INS_WALLET_TOPUP: Byte   = 0x50
         private const val INS_WALLET_PAY: Byte     = 0x51
         private const val INS_GET_BALANCE: Byte    = 0x52
+        private const val INS_GET_POINT: Byte      = 0x54
 
         // ✅ INS AVATAR (Giao thức mới)
         private const val INS_UPDATE_AVATAR: Int   = 0x10 // Upload
@@ -46,7 +51,6 @@ class SmartCardRepositoryImpl(
         // ✅ QUAN TRỌNG: Kích thước chunk phải chia hết cho 16 để mã hóa AES
         // 240 / 16 = 15 (Chẵn block) -> OK
         private const val MAX_APDU_DATA_SIZE = 240
-
         private const val MAX_AVATAR_SIZE = 8192
 
         // ===== EMP INFO LAYOUT =====
@@ -75,10 +79,18 @@ class SmartCardRepositoryImpl(
         private const val SUB_TX_PAYMENT: Byte = 2
 
         private val UTF8: Charset = Charsets.UTF_8
+        private var nextEmpNumericId: Int = 1
+
+        fun generateNextEmpId(): String {
+            val num = nextEmpNumericId++
+            return "NV" + num.toString().padStart(3, '0')
+        }
     }
 
     override fun connect(): Boolean = api.connect()
     override fun disconnect() = api.disconnect()
+    private var cachedPublicKey: PublicKey? = null
+    private var cachedCardID: ByteArray? = null
 
     private fun computeArgon2Hash(pin: String, salt: ByteArray): ByteArray {
         // Memory: 65536 KB, Iterations: 2, Parallelism: 1
@@ -113,6 +125,78 @@ class SmartCardRepositoryImpl(
         if (!isSw9000(resp)) return false // Default là false hoặc handle error
         val data = dataPart(resp)
         return data.isNotEmpty() && data[0] == 0x01.toByte()
+    }
+
+    private fun getPublicKeyFromCard(): PublicKey? {
+        if (cachedPublicKey != null) return cachedPublicKey
+        val pubKeyResp = api.sendApdu(byteArrayOf(0x80.toByte(), 0x27, 0x00, 0x00, 0x00))
+        if (!isSw9000(pubKeyResp)) {
+            println("❌ Lỗi: Không lấy được Public Key từ thẻ.")
+            return null
+        }
+        val data = dataPart(pubKeyResp)
+        // [Len Mod (2 bytes)] [Modulus Data] [Len Exp (2 bytes)] [Exponent Data]
+        if (data.size < 4) {
+            println("❌ Lỗi: Dữ liệu Key quá ngắn.")
+            return null
+        }
+        try {
+            var offset = 0
+            // A. Đọc độ dài Modulus (2 bytes đầu - Big Endian)
+            val modLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
+            offset += 2
+            // B. Đọc dữ liệu Modulus
+            if (data.size < offset + modLen) return null
+            val modulusBytes = data.copyOfRange(offset, offset + modLen)
+            // Lưu ý: Dùng BigInteger(1, ...) để đảm bảo số dương
+            val modulus = BigInteger(1, modulusBytes)
+            offset += modLen
+            // C. Đọc độ dài Exponent (2 bytes tiếp theo)
+            if (data.size < offset + 2) return null
+            val expLen = ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
+            offset += 2
+            // D. Đọc dữ liệu Exponent
+            if (data.size < offset + expLen) return null
+            val exponentBytes = data.copyOfRange(offset, offset + expLen)
+            val exponent = BigInteger(1, exponentBytes)
+            // E. Tạo RSA Public Key
+            val spec = RSAPublicKeySpec(modulus, exponent)
+            val factory = KeyFactory.getInstance("RSA")
+            cachedPublicKey = factory.generatePublic(spec)
+
+            println("✅ Đã lấy Public Key (Mod: $modLen bytes, Exp: $expLen bytes)")
+            return cachedPublicKey
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+
+    override fun initEmployeeAfterActivation(): Employee {
+        val newId = generateNextEmpId()
+        // Tạo Employee với ID mới
+        val emp = Employee(
+            id = newId,
+            name = "Nguyễn Văn A",
+            dob = "01/01/1995",
+            department = "IT",
+            position = "Developer",
+            photoPath = null
+        )
+        updateEmployee(emp)
+        cachedCardID = null
+        return emp
+    }
+
+    private fun getCardID(): ByteArray {
+        if (cachedCardID != null) return cachedCardID!!
+        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), 0x30, 0x00, 0x00, 0x00))
+        if (!isSw9000(resp) || resp.size < 16) {
+            return ByteArray(16) // Trả về rỗng nếu lỗi
+        }
+        val data = dataPart(resp)
+        cachedCardID = data.copyOfRange(0, 16) // ID nằm ở 16 byte đầu
+        return cachedCardID!!
     }
 
     override fun setupFirstPin(newPin: String): Boolean {
@@ -227,26 +311,27 @@ class SmartCardRepositoryImpl(
 
     override fun authenticateCard(): Boolean {
         try {
-            val pubKeyResp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_GET_PUB_KEY, 0x00, 0x00, 0x00))
-            if (!isSw9000(pubKeyResp)) return false
-            val keyData = dataPart(pubKeyResp)
-            val modulusLen = 128
-            if (keyData.size < modulusLen) return false
-            val modulus = BigInteger(1, keyData.copyOfRange(0, modulusLen))
-            val exponent = BigInteger(1, keyData.copyOfRange(modulusLen, keyData.size))
-            val publicKey = KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulus, exponent))
-
-            val challenge = ByteArray(16) { (Math.random() * 255).toInt().toByte() }
-            val signApdu = byteArrayOf(0x80.toByte(), INS_AUTHENTICATE, 0x00, 0x00, challenge.size.toByte()) + challenge
+            val publicKey = getPublicKeyFromCard() ?: return false
+            // Tạo challenge random
+            val challenge = ByteArray(16)
+            SecureRandom().nextBytes(challenge)
+            // Gửi xuống thẻ để ký
+            val signApdu = byteArrayOf(
+                0x80.toByte(), INS_AUTHENTICATE,
+                0x00, 0x00, challenge.size.toByte()
+            ) + challenge
             val signResp = api.sendApdu(signApdu)
             if (!isSw9000(signResp)) return false
-
             val signature = dataPart(signResp)
+            // Verify
             val verifier = Signature.getInstance("SHA1withRSA")
             verifier.initVerify(publicKey)
             verifier.update(challenge)
             return verifier.verify(signature)
-        } catch (e: Exception) { return false }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
     }
 
     private fun isSw9000(resp: ByteArray): Boolean =
@@ -326,12 +411,76 @@ class SmartCardRepositoryImpl(
     }
 
     override fun pay(amount: Double, description: String): Boolean {
-        val amt = amount.toInt()
-        val apdu = byteArrayOf(0x80.toByte(), INS_WALLET_PAY, 0x00, 0x00, 0x04,
-            (amt ushr 24).toByte(), (amt ushr 16).toByte(), (amt ushr 8).toByte(), amt.toByte())
-        val ok = isSw9000(api.sendApdu(apdu))
-        if(ok) sendAddLog(encodeTxLogPayload(KIND_TX, SUB_TX_PAYMENT, LocalDateTime.now(), amt, getBalanceRaw(), description))
-        return ok
+        val amtInt = amount.toInt()
+        // A. Amount (4 bytes)
+        val amountBytes = ByteBuffer.allocate(4).putInt(amtInt).array()
+        // B. Time (4 bytes - Unix Timestamp)
+        val now = LocalDateTime.now()
+        val timestamp = now.toEpochSecond(ZoneOffset.UTC).toInt()
+        val timeBytes = ByteBuffer.allocate(4).putInt(timestamp).array()
+        // C. UN (Unique Number / Nonce - 4 bytes Random) - Chống replay
+        val unBytes = ByteArray(4)
+        SecureRandom().nextBytes(unBytes)
+        //  4 + 4 + 4 = 12 bytes
+        val payData = amountBytes + timeBytes + unBytes
+        // 2. Gửi lệnh APDU
+        val apdu = byteArrayOf(0x80.toByte(), 0x51, 0x00, 0x00, payData.size.toByte()) + payData
+        val resp = api.sendApdu(apdu)
+        if (!isSw9000(resp)) {
+            println("❌ Thanh toán thất bại.")
+            return false
+        }
+
+        val newBalance = getBalanceRaw()
+        sendAddLog(encodeTxLogPayload(
+            KIND_TX,
+            SUB_TX_PAYMENT,
+            LocalDateTime.now(),
+            amtInt,
+            newBalance,
+            description
+        ))
+        // 3. Nhận Chữ ký số (Digital Signature)
+        val signature = dataPart(resp)
+        //println("✅ Thanh toán thành công! Nhận được chữ ký (${signature.size} bytes)")
+        val cardID = getCardID()
+        val isValid = verifyPaymentSignature(signature, cardID, amountBytes, timeBytes, unBytes)
+        if (isValid) {
+            println("✅ Thanh toán thành công và Chữ ký hợp lệ!")
+            return true
+        } else {
+            println("⚠️ CẢNH BÁO: Chữ ký giả mạo!")
+            return false
+        }
+        return true
+    }
+
+    fun verifyPaymentSignature(
+        signature: ByteArray,
+        cardId: ByteArray,
+        amountBytes: ByteArray,
+        timeBytes: ByteArray,
+        unBytes: ByteArray,
+    ): Boolean {
+        val pubKey = getPublicKeyFromCard() ?: return false
+        // [ID (16)] [Amount (4)] [Time (4)] [UN (4)]
+        val originalData = ByteBuffer.allocate(16 + 4 + 4 + 4)
+            .put(cardId)
+            .put(amountBytes)
+            .put(timeBytes)
+            .put(unBytes)
+            .array()
+
+        return try {
+            // Applet dùng ALG_RSA_SHA_PKCS1 -> Host dùng "SHA1withRSA"
+            val verifier = Signature.getInstance("SHA1withRSA")
+            verifier.initVerify(pubKey)
+            verifier.update(originalData)
+            verifier.verify(signature)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
     }
 
     private fun sendAddLog(payload: ByteArray) {

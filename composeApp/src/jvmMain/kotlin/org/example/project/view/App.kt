@@ -53,6 +53,7 @@ fun DesktopApp() {
 
     // State quản lý trạng thái thẻ (PIN, Khóa, Số dư)
     var cardState by remember { mutableStateOf(repo.getCardState()) }
+    var forceEditProfile by remember { mutableStateOf(false) }
 
     // Hàm ép cập nhật lại trạng thái thẻ từ phần cứng
     fun refreshCardState() {
@@ -84,11 +85,23 @@ fun DesktopApp() {
 
                     withContext(Dispatchers.Main) {
                         if (success) {
-                            // Setup xong -> Coi như đăng nhập thành công luôn
+                            // 1) Setup PIN xong => đăng nhập luôn
                             isAuthenticated = true
                             showCreatePinDialog = false
-                            refreshCardState() // Lấy thông tin thẻ mới
+
+                            // 2) Khởi tạo thông tin nhân viên: sinh ID NV00x + ghi xuống thẻ
+                            try {
+                                repo.initEmployeeAfterActivation()
+                            } catch (e: Exception) {
+                                connectionError = "Lỗi khi khởi tạo thông tin nhân viên: ${e.message}"
+                            }
+
+                            // 3) Cập nhật state thẻ + chuyển sang màn hồ sơ
+                            refreshCardState()
                             currentScreen = MainScreen.EMPLOYEE_INFO
+
+                            // 4) Báo cho màn EmployeeScreen rằng cần mở ChangeProfileDialog lần đầu
+                            forceEditProfile = true
                         } else {
                             connectionError = "Lỗi khi kích hoạt thẻ!"
                             showCreatePinDialog = false
@@ -248,7 +261,9 @@ fun DesktopApp() {
                         when (screen) {
                             MainScreen.EMPLOYEE_INFO -> EmployeeScreen(
                                 onChangePin = { act -> pendingAction = act; showActionPinDialog = true },
-                                isAuthenticated = isAuthenticated
+                                isAuthenticated = isAuthenticated,
+                                forceEditProfile = forceEditProfile,
+                                onForceEditConsumed = { forceEditProfile = false }
                             )
                             MainScreen.ACCESS_CONTROL -> AccessControlScreen(
                                 onRestrictedArea = { act -> pendingAction = act; showActionPinDialog = true }

@@ -11,6 +11,7 @@ object MockCardRepository : CardRepository {
     private var pinTriesRemaining = maxPinTries
     private var isBlocked = false
     private var isCardSetup = false
+    private var lastEmpNumericId = 1
 
     private var balance: Double = 100_000.0
 
@@ -22,6 +23,23 @@ object MockCardRepository : CardRepository {
         position = "Developer",
         photoPath = null
     )
+
+    private fun generateNextEmpId(): String {
+        val num = lastEmpNumericId++
+        return "NV" + num.toString().padStart(3, '0')
+    }
+
+    override fun initEmployeeAfterActivation(): Employee {
+        val newId = generateNextEmpId()
+        employee = employee.copy(
+            id = newId,
+            name = "",
+            dob = "",
+            department = "",
+            position = ""
+        )
+        return employee
+    }
 
     private val accessLogs = mutableListOf<AccessLogEntry>()
     private val transactions = mutableListOf<Transaction>()
