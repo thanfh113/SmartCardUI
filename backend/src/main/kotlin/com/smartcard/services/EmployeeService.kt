@@ -4,6 +4,7 @@ import com.smartcard.data.DatabaseFactory.dbQuery
 import com.smartcard.models.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.statements.api.ExposedBlob
 import java.math.BigDecimal
 import java.time.format.DateTimeFormatter
 
@@ -21,7 +22,8 @@ class EmployeeService(private val cryptoService: CryptoService) {
         Employees
             .innerJoin(Departments)
             .innerJoin(Positions)
-            .select { Employees.id eq id }
+            .selectAll()
+            .where { Employees.id eq id }
             .map { toEmployeeDTO(it) }
             .singleOrNull()
     }
@@ -30,15 +32,16 @@ class EmployeeService(private val cryptoService: CryptoService) {
         Employees
             .innerJoin(Departments)
             .innerJoin(Positions)
-            .select { Employees.cardUuid eq cardUuid }
+            .selectAll()
+            .where { Employees.cardUuid eq cardUuid }
             .map { toEmployeeDTO(it) }
             .singleOrNull()
     }
 
     suspend fun createEmployee(request: CreateEmployeeRequest): EmployeeDTO = dbQuery {
         // Check if card UUID or employee ID already exists
-        val existingByCard = Employees.select { Employees.cardUuid eq request.cardUuid }.count() > 0
-        val existingByEmpId = Employees.select { Employees.employeeId eq request.employeeId }.count() > 0
+        val existingByCard = Employees.selectAll().where { Employees.cardUuid eq request.cardUuid }.count() > 0
+        val existingByEmpId = Employees.selectAll().where { Employees.employeeId eq request.employeeId }.count() > 0
         
         if (existingByCard) {
             throw IllegalArgumentException("Card UUID already registered")
@@ -59,7 +62,7 @@ class EmployeeService(private val cryptoService: CryptoService) {
             it[role] = EmployeeRole.valueOf(request.role)
             it[balance] = BigDecimal.ZERO
             it[photoPath] = request.photoPath
-            it[rsaPublicKey] = publicKeyBytes
+            it[rsaPublicKey] = publicKeyBytes?.let { bytes -> ExposedBlob(bytes) }
             it[pinHash] = request.pinHash
             it[isActive] = true
         }
@@ -68,7 +71,7 @@ class EmployeeService(private val cryptoService: CryptoService) {
     }
 
     suspend fun updateEmployee(id: Int, request: UpdateEmployeeRequest): EmployeeDTO? = dbQuery {
-        val exists = Employees.select { Employees.id eq id }.count() > 0
+        val exists = Employees.selectAll().where { Employees.id eq id }.count() > 0
         if (!exists) return@dbQuery null
 
         Employees.update({ Employees.id eq id }) {
@@ -88,12 +91,12 @@ class EmployeeService(private val cryptoService: CryptoService) {
     }
 
     suspend fun syncCardData(request: CardSyncRequest): EmployeeDTO? = dbQuery {
-        val employee = Employees.select { Employees.cardUuid eq request.cardUuid }
+        val employee = Employees.selectAll().where { Employees.cardUuid eq request.cardUuid }
             .singleOrNull() ?: return@dbQuery null
 
         Employees.update({ Employees.cardUuid eq request.cardUuid }) {
             request.rsaPublicKey?.let { key ->
-                it[rsaPublicKey] = cryptoService.decodeBase64(key)
+                it[rsaPublicKey] = ExposedBlob(cryptoService.decodeBase64(key))
             }
             request.balance?.let { bal ->
                 it[balance] = bal
@@ -110,7 +113,7 @@ class EmployeeService(private val cryptoService: CryptoService) {
     }
 
     suspend fun getBalance(employeeId: Int): BigDecimal? = dbQuery {
-        Employees.select { Employees.id eq employeeId }
+        Employees.selectAll().where { Employees.id eq employeeId }
             .map { it[Employees.balance] }
             .singleOrNull()
     }

@@ -12,7 +12,7 @@ class DepartmentService {
     }
 
     suspend fun getById(id: Int): DepartmentDTO? = dbQuery {
-        Departments.select { Departments.id eq id }
+        Departments.selectAll().where { Departments.id eq id }
             .map { toDepartmentDTO(it) }
             .singleOrNull()
     }
@@ -26,7 +26,7 @@ class DepartmentService {
     }
 
     suspend fun update(id: Int, dto: DepartmentDTO): DepartmentDTO? = dbQuery {
-        val exists = Departments.select { Departments.id eq id }.count() > 0
+        val exists = Departments.selectAll().where { Departments.id eq id }.count() > 0
         if (!exists) return@dbQuery null
 
         Departments.update({ Departments.id eq id }) {
@@ -56,7 +56,7 @@ class PositionService {
     }
 
     suspend fun getById(id: Int): PositionDTO? = dbQuery {
-        Positions.select { Positions.id eq id }
+        Positions.selectAll().where { Positions.id eq id }
             .map { toPositionDTO(it) }
             .singleOrNull()
     }
@@ -70,7 +70,7 @@ class PositionService {
     }
 
     suspend fun update(id: Int, dto: PositionDTO): PositionDTO? = dbQuery {
-        val exists = Positions.select { Positions.id eq id }.count() > 0
+        val exists = Positions.selectAll().where { Positions.id eq id }.count() > 0
         if (!exists) return@dbQuery null
 
         Positions.update({ Positions.id eq id }) {
@@ -100,12 +100,12 @@ class ProductService {
     }
 
     suspend fun getAvailable(): List<ProductDTO> = dbQuery {
-        Products.select { Products.isAvailable eq true }
+        Products.selectAll().where { Products.isAvailable eq true }
             .map { toProductDTO(it) }
     }
 
     suspend fun getById(id: Int): ProductDTO? = dbQuery {
-        Products.select { Products.id eq id }
+        Products.selectAll().where { Products.id eq id }
             .map { toProductDTO(it) }
             .singleOrNull()
     }
@@ -123,7 +123,7 @@ class ProductService {
     }
 
     suspend fun update(id: Int, dto: ProductDTO): ProductDTO? = dbQuery {
-        val exists = Products.select { Products.id eq id }.count() > 0
+        val exists = Products.selectAll().where { Products.id eq id }.count() > 0
         if (!exists) return@dbQuery null
 
         Products.update({ Products.id eq id }) {

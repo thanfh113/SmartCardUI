@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.kotlinJvm)
     alias(libs.plugins.kotlinSerialization)
-    alias(libs.plugins.ktorPlugin)
     application
 }
 
@@ -51,11 +50,6 @@ dependencies {
     // Testing
     testImplementation(libs.ktor.server.tests)
     testImplementation(libs.kotlin.test)
-    testImplementation(libs.kotlin.testJunit)
-}
-
-tasks.test {
-    useJUnitPlatform()
 }
 
 kotlin {

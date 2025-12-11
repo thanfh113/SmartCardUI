@@ -4,6 +4,7 @@ import com.smartcard.data.DatabaseFactory.dbQuery
 import com.smartcard.models.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.statements.api.ExposedBlob
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDateTime
@@ -58,7 +59,7 @@ class TransactionService(
         }
 
         // Get product
-        val product = Products.select { Products.id eq request.productId }
+        val product = Products.selectAll().where { Products.id eq request.productId }
             .singleOrNull() ?: throw IllegalArgumentException("Product not found")
 
         if (!product[Products.isAvailable]) {
@@ -66,8 +67,8 @@ class TransactionService(
         }
 
         // Verify RSA signature if public key exists
-        val publicKeyBytes = Employees.select { Employees.id eq request.employeeId }
-            .map { it[Employees.rsaPublicKey] }
+        val publicKeyBytes = Employees.selectAll().where { Employees.id eq request.employeeId }
+            .map { it[Employees.rsaPublicKey]?.bytes }
             .singleOrNull()
 
         if (publicKeyBytes != null) {
@@ -104,7 +105,7 @@ class TransactionService(
             it[balanceAfter] = newBalance
             it[description] = "Payment for ${product[Products.name]}"
             it[productId] = request.productId
-            it[signature] = cryptoService.decodeBase64(request.signature)
+            it[signature] = ExposedBlob(cryptoService.decodeBase64(request.signature))
             it[uniqueNumber] = request.uniqueNumber
         }
 
@@ -115,7 +116,8 @@ class TransactionService(
         Transactions
             .innerJoin(Employees)
             .leftJoin(Products)
-            .select { Transactions.employeeId eq employeeId }
+            .selectAll()
+            .where { Transactions.employeeId eq employeeId }
             .orderBy(Transactions.transactionTime to SortOrder.DESC)
             .limit(limit)
             .map { toTransactionDTO(it) }
@@ -125,7 +127,8 @@ class TransactionService(
         Transactions
             .innerJoin(Employees)
             .leftJoin(Products)
-            .select { Transactions.id eq id }
+            .selectAll()
+            .where { Transactions.id eq id }
             .map { toTransactionDTO(it) }
             .singleOrNull()
     }

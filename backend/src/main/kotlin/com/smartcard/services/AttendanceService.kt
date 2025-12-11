@@ -14,7 +14,8 @@ class AttendanceService {
     suspend fun checkIn(request: CheckInRequest): AttendanceLogDTO = dbQuery {
         // Check if already checked in for this date
         val existing = AttendanceLogs
-            .select { 
+            .selectAll()
+            .where { 
                 (AttendanceLogs.employeeId eq request.employeeId) and 
                 (AttendanceLogs.workDate eq request.workDate) 
             }
@@ -25,7 +26,7 @@ class AttendanceService {
         }
 
         val checkInTime = LocalTime.parse(request.checkInTime)
-        val status = when {
+        val statusValue = when {
             checkInTime <= businessStartTime -> "ON_TIME"
             checkInTime <= lateThreshold -> "LATE"
             else -> "LATE"
@@ -34,8 +35,8 @@ class AttendanceService {
         val id = AttendanceLogs.insertAndGetId {
             it[employeeId] = request.employeeId
             it[workDate] = request.workDate
-            it[checkInTime] = request.checkInTime
-            it[AttendanceLogs.status] = status
+            it[AttendanceLogs.checkInTime] = request.checkInTime
+            it[status] = statusValue
         }
 
         getAttendanceById(id.value)!!
@@ -43,7 +44,8 @@ class AttendanceService {
 
     suspend fun checkOut(request: CheckOutRequest): AttendanceLogDTO = dbQuery {
         val attendance = AttendanceLogs
-            .select { 
+            .selectAll()
+            .where { 
                 (AttendanceLogs.employeeId eq request.employeeId) and 
                 (AttendanceLogs.workDate eq request.workDate) 
             }
@@ -66,7 +68,8 @@ class AttendanceService {
     suspend fun getAttendanceHistory(employeeId: Int, limit: Int = 30): List<AttendanceLogDTO> = dbQuery {
         AttendanceLogs
             .innerJoin(Employees)
-            .select { AttendanceLogs.employeeId eq employeeId }
+            .selectAll()
+            .where { AttendanceLogs.employeeId eq employeeId }
             .orderBy(AttendanceLogs.workDate to SortOrder.DESC)
             .limit(limit)
             .map { toAttendanceDTO(it) }
@@ -94,7 +97,8 @@ class AttendanceService {
     private suspend fun getAttendanceById(id: Int): AttendanceLogDTO? = dbQuery {
         AttendanceLogs
             .innerJoin(Employees)
-            .select { AttendanceLogs.id eq id }
+            .selectAll()
+            .where { AttendanceLogs.id eq id }
             .map { toAttendanceDTO(it) }
             .singleOrNull()
     }
@@ -102,7 +106,8 @@ class AttendanceService {
     private suspend fun getAttendanceByEmployeeAndDate(employeeId: Int, workDate: String): AttendanceLogDTO? = dbQuery {
         AttendanceLogs
             .innerJoin(Employees)
-            .select { 
+            .selectAll()
+            .where { 
                 (AttendanceLogs.employeeId eq employeeId) and 
                 (AttendanceLogs.workDate eq workDate) 
             }
