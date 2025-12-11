@@ -1,0 +1,90 @@
+{
+  "info": {
+    "name": "SmartCard Backend API",
+    "description": "API collection for SmartCard Employee Management System",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Employees",
+      "item": [
+        {
+          "name": "Get All Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/employees",
+              "host": ["{{base_url}}"],
+              "path": ["api", "employees"]
+            }
+          }
+        },
+        {
+          "name": "Create Employee",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"cardUuid\": \"550e8400-e29b-41d4-a716-446655440000\", \"employeeId\": \"NV001\", \"name\": \"Nguyễn Văn A\", \"dateOfBirth\": \"1990-01-01\", \"departmentId\": 1, \"positionId\": 4, \"role\": \"USER\"}"
+            },
+            "url": {"raw": "{{base_url}}/api/employees", "host": ["{{base_url}}"], "path": ["api", "employees"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "Top-up Balance",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"employeeId\": 1, \"amount\": 100000.00, \"description\": \"Monthly allowance\"}"
+            },
+            "url": {"raw": "{{base_url}}/api/transactions/topup", "host": ["{{base_url}}"], "path": ["api", "transactions", "topup"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Attendance",
+      "item": [
+        {
+          "name": "Check In",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"employeeId\": 1, \"workDate\": \"2024-12-11\", \"checkInTime\": \"08:15:00\"}"
+            },
+            "url": {"raw": "{{base_url}}/api/attendance/checkin", "host": ["{{base_url}}"], "path": ["api", "attendance", "checkin"]}
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [{"key": "base_url", "value": "http://localhost:8080", "type": "string"}]
+}
