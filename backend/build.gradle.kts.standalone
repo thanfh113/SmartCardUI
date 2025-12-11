@@ -1,0 +1,57 @@
+plugins {
+    kotlin("jvm") version "2.2.20"
+    kotlin("plugin.serialization") version "2.2.20"
+    application
+}
+
+group = "com.smartcard"
+version = "1.0.0"
+
+application {
+    mainClass.set("com.smartcard.ApplicationKt")
+    
+    val isDevelopment: Boolean = project.ext.has("development")
+    applicationDefaultJvmArgs = listOf("-Dio.ktor.development=$isDevelopment")
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Ktor Server
+    implementation("io.ktor:ktor-server-core:2.3.12")
+    implementation("io.ktor:ktor-server-netty:2.3.12")
+    implementation("io.ktor:ktor-server-content-negotiation:2.3.12")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
+    implementation("io.ktor:ktor-server-cors:2.3.12")
+    implementation("io.ktor:ktor-server-status-pages:2.3.12")
+    implementation("io.ktor:ktor-server-config-yaml:2.3.12")
+    implementation("io.ktor:ktor-server-call-logging:2.3.12")
+    
+    // Database - Exposed ORM
+    implementation("org.jetbrains.exposed:exposed-core:0.55.0")
+    implementation("org.jetbrains.exposed:exposed-dao:0.55.0")
+    implementation("org.jetbrains.exposed:exposed-jdbc:0.55.0")
+    implementation("org.jetbrains.exposed:exposed-java-time:0.55.0")
+    implementation("com.mysql:mysql-connector-j:8.0.33")
+    implementation("com.zaxxer:HikariCP:5.1.0")
+    
+    // Security
+    implementation("at.favre.lib:bcrypt:0.10.2")
+    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+    
+    // Logging
+    implementation("ch.qos.logback:logback-classic:1.5.6")
+    
+    // Serialization
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    
+    // Testing
+    testImplementation("io.ktor:ktor-server-tests:2.3.12")
+    testImplementation("org.jetbrains.kotlin:kotlin-test:2.2.20")
+}
+
+kotlin {
+    jvmToolchain(17)
+}
