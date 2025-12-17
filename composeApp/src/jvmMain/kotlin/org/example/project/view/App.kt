@@ -212,46 +212,55 @@ fun DesktopApp(isAdminLauncher: Boolean = false) {
     // 🔥 KHỐI DIALOG BUỘC ĐỔI PIN (Dùng lại CreatePinDialog)
     if (showForcePinChangeDialog) {
         CreatePinDialog(
-            // Không cho hủy nếu chưa đổi PIN thành công
             onDismiss = {
                 connectionError = "Thẻ chưa được kích hoạt hoàn toàn. Vui lòng đổi PIN!"
-                // Thoát ứng dụng nếu người dùng đóng dialog buộc đổi PIN
                 exitProcess(0)
             },
+            // 🔥 QUAN TRỌNG: Truyền state lỗi vào đây
+            externalError = connectionError,
             onConfirm = { newPin ->
-                val oldPin = pendingOldPin // Lấy PIN cũ
+                val oldPin = pendingOldPin
                 if (oldPin == null) {
-                    connectionError = "❌ Lỗi bảo mật: Không tìm thấy PIN cũ (Lỗi ứng dụng)."
+                    connectionError = "❌ Lỗi: Không tìm thấy PIN cũ."
                     return@CreatePinDialog
                 }
 
                 scope.launch(Dispatchers.IO) {
-                    val cardUuid = repo.getCardIDHex()
+                    try {
+                        // Reset lỗi cũ khi bắt đầu nhấn nút
+                        withContext(Dispatchers.Main) { connectionError = null }
 
-                    // 1. Ghi PIN mới vào Thẻ
-                    // ✅ SỬA LỖI: Truyền đủ 2 tham số (oldPin và newPin)
-                    val cardSuccess = repo.changePin(oldPin, newPin)
+                        val cardUuid = repo.getCardIDHex()
 
-                    // 2. Báo Server set isDefaultPin = false
-                    val serverSuccess = if (cardSuccess) {
-                        repo.reportPinChanged(cardUuid)
-                    } else false
+                        // 1. Ghi PIN mới vào Thẻ (Có thể ném PinIdenticalException)
+                        val cardSuccess = repo.changePin(oldPin, newPin)
 
-                    withContext(Dispatchers.Main) {
-                        if (cardSuccess && serverSuccess) {
-                            showForcePinChangeDialog = false
-                            isAuthenticated = true // Xác thực hoàn toàn
+                        // 2. Báo Server set isDefaultPin = false
+                        if (cardSuccess) {
+                            val serverOk = repo.reportPinChanged(cardUuid)
 
-                            // Cập nhật role cuối cùng
-                            val empInfo = repo.getEmployeeFromServer(cardUuid)
-                            userRole = empInfo?.role ?: "USER"
-
-                            currentScreen = MainScreen.EMPLOYEE_INFO
-                            connectionError = "✅ Đổi PIN thành công! Đăng nhập hoàn tất."
-                            pendingOldPin = null // Xóa PIN cũ khỏi bộ nhớ
-                        } else {
-                            connectionError = "❌ Lỗi: Không thể đổi PIN trên Thẻ/Server. Vui lòng thử lại."
-                            // Giữ dialog mở để người dùng thử lại
+                            withContext(Dispatchers.Main) {
+                                if (serverOk) {
+                                    showForcePinChangeDialog = false
+                                    isAuthenticated = true
+                                    val empInfo = repo.getEmployeeFromServer(cardUuid)
+                                    userRole = empInfo?.role ?: "USER"
+                                    currentScreen = MainScreen.EMPLOYEE_INFO
+                                    connectionError = "✅ Đổi PIN thành công!"
+                                    pendingOldPin = null
+                                } else {
+                                    connectionError = "❌ Lỗi: Thẻ đã đổi nhưng Server không cập nhật được."
+                                }
+                            }
+                        }
+                    } catch (e: org.example.project.data.PinIdenticalException) {
+                        // ✅ Bắt lỗi trùng PIN: Cập nhật biến này sẽ làm Dialog tắt xoay vòng nhờ LaunchedEffect
+                        withContext(Dispatchers.Main) {
+                            connectionError = "⚠️ PIN mới không được trùng PIN mặc định (123456)!"
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            connectionError = "❌ Lỗi hệ thống: ${e.message}"
                         }
                     }
                 }

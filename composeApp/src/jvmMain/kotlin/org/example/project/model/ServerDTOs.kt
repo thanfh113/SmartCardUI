@@ -77,3 +77,9 @@ data class HistoryLogEntry(
     val amount: String, // String
     val balanceAfter: String // String
 )
+
+@Serializable
+data class SetDefaultPinRequest(
+    val cardUuid: String,
+    val isDefaultPin: Boolean
+)

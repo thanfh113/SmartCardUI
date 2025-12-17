@@ -117,7 +117,7 @@ fun CardManagementDialog(
                 ) {
                     Icon(Icons.Default.VpnKey, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Reset PIN về 123456")
+                    Text("Reset PIN")
                 }
 
                 // Form nhập PIN Admin khi chọn hành động

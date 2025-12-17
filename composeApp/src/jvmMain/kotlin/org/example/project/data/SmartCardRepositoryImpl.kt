@@ -22,6 +22,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CoroutineScope
@@ -195,22 +196,50 @@ class SmartCardRepositoryImpl(
         val apdu = byteArrayOf(0x80.toByte(), INS_VERIFY_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
         return isSw9000(api.sendApdu(apdu))
     }
+    private fun isSwPinIdentical(resp: ByteArray): Boolean {
+        return resp.size >= 2 &&
+                resp[resp.size - 2] == 0x6A.toByte() &&
+                resp[resp.size - 1] == 0x89.toByte()
+    }
 
     override fun changePin(oldPin: String, newPin: String): Boolean {
-        // Logic đổi PIN trên thẻ (chỉ cho User)
         val salt = getSaltFromCard() ?: return false
         val newDerivedKey = computeArgon2Hash(newPin, salt)
-        val apdu = byteArrayOf(0x80.toByte(), INS_CHANGE_PIN, 0x00, 0x00, newDerivedKey.size.toByte()) + newDerivedKey
-        return isSw9000(api.sendApdu(apdu))
+
+        val apdu = byteArrayOf(
+            0x80.toByte(),
+            INS_CHANGE_PIN,
+            0x00,
+            0x00,
+            newDerivedKey.size.toByte()
+        ) + newDerivedKey
+
+        val resp = api.sendApdu(apdu)
+
+        // 🔥 Kiểm tra mã lỗi PIN trùng
+        if (isSwPinIdentical(resp)) {
+            throw PinIdenticalException("Mã PIN mới trùng với mã PIN hiện tại!")
+        }
+
+        return isSw9000(resp)
     }
-    override suspend fun changeAdminPin (id: String, newPin: String): Boolean {
+    override suspend fun changeAdminPin(id: String, newPin: String): Boolean {
         return try {
             val response = client.post("$SERVER_URL/admin/change-pin") {
                 contentType(ContentType.Application.Json)
                 setBody(mapOf("id" to id, "newPin" to newPin))
             }
+
+            // Nếu Server báo mã PIN mới trùng mã cũ
+            if (response.status == HttpStatusCode.Conflict) {
+                throw PinIdenticalException("Mã PIN mới trùng với mã PIN hiện tại!")
+            }
+
             response.status == HttpStatusCode.OK
+        } catch (e: PinIdenticalException) {
+            throw e // Quăng lỗi ra để UI bắt
         } catch (e: Exception) {
+            println("❌ Lỗi đổi PIN Admin: ${e.message}")
             false
         }
     }
@@ -851,77 +880,93 @@ class SmartCardRepositoryImpl(
 
     // THÊM: Quy trình đầy đủ Admin reset PIN (ĐÃ THÊM TÁI XÁC THỰC PIN MỚI)
     override suspend fun adminResetUserPin(
-        adminPin: String, // PIN Admin (đã verified ở tầng trên)
-        userCardUuid: String,
-        newUserPin: String // Pin mới, vd: "123456"
+        adminPin: String,       // PIN Admin (đã verified ở tầng trên)
+        userCardUuid: String,   // cardUuid của nhân viên cần reset
+        newUserPin: String      // PIN mới (thường là "123456")
     ): Boolean {
         var finalResult = false
-        // Bỏ khối try/catch lớn để debug tốt hơn, nhưng dùng khối try/finally cho disconnect
 
+        println("📢 [adminResetUserPin] userCardUuid='$userCardUuid' len=${userCardUuid.length} newPinLen=${newUserPin.length}")
         println("📢 Đang cố gắng kết nối với thẻ USER để Reset PIN...")
-        if (!connect()) return false // Kết nối ban đầu
+
+        if (!connect()) {
+            println("❌ Kết nối thẻ thất bại (connect() = false)")
+            return false
+        }
 
         try {
-            // B1: Kiểm tra khóa và UNLOCK (trên cùng một kết nối)
+            // B1: UNLOCK nếu thẻ bị khóa do nhập sai quá 3 lần
             if (isCardLocked()) {
-                println("⚠️ Thẻ đang bị khóa, đang tiến hành mở khóa...")
-                // LƯU Ý: Chức năng adminUnlockCard hiện tại của bạn yêu cầu Server Verify PIN Admin,
-                // sau đó nó gửi lệnh 80 2C. Hàm này phải được gọi trong phiên kết nối này.
-
-                // 🔥 FIX: Thay vì gọi hàm adminUnlockCard cũ (có disconnect bên trong),
-                // ta gọi lệnh APDU trực tiếp (80 2C) sau khi VERIFY PIN ADMIN (qua server)
-
-                // Tạm thời, ta sử dụng VERIFY PIN ADMIN trực tiếp lên thẻ USER để có quyền UNLOCK
-                // (Chỉ áp dụng nếu bạn sửa lại hàm adminUnlockCard trong file này)
-
-                // Giả định: adminUnlockCard chỉ gửi 80 2C (như code bạn cung cấp)
+                println("⚠️ Thẻ đang bị khóa, đang tiến hành mở khóa bằng quyền Admin...")
                 if (!adminUnlockCard(adminPin)) {
-                    println("❌ Không thể mở khóa thẻ.")
+                    println("❌ Không thể mở khóa thẻ vật lý.")
                     return false
                 }
                 println("✅ Đã mở khóa thẻ thành công.")
             }
 
-            // B2: Thực hiện RESET PIN (INS_RESET_PIN 80 2D)
+            // B2: Thực hiện Reset PIN trên thẻ (Lệnh 80 2D)
             val resetSuccess = adminResetPin(adminPin, newUserPin)
+            if (!resetSuccess) {
+                println("❌ Reset PIN trên thẻ thất bại (có thể PIN mới trùng PIN cũ).")
+                return false
+            }
+            println("✅ Đã reset PIN thành công trên thẻ.")
 
-            if (resetSuccess) {
-                println("✅ Đã reset PIN thành công.")
+            // B3: Tái xác thực bằng PIN mới để thiết lập phiên làm việc (Session)
+            // Việc này giúp thẻ nạp Master Key mới vào RAM để đọc được dữ liệu ngay lập tức
+            println("📢 Tái xác thực bằng PIN mới để thiết lập phiên giải mã...")
+            if (!verifyPin(newUserPin)) {
+                println("❌ Tái xác thực bằng PIN mới thất bại.")
+                return false
+            }
+            println("✅ Tái xác thực PIN mới thành công. Thẻ đã sẵn sàng truy cập.")
 
-                // B3: TÁI XÁC THỰC BẰNG PIN MỚI (TRONG CÙNG PHIÊN)
-                // Lệnh 80 25 này sẽ tải Master Key vào RAM và set isValidated = true
-                println("📢 Tái xác thực bằng PIN mới để thiết lập phiên giải mã...")
+            // B4: Đọc thử số dư để kiểm chứng quyền truy cập
+            val balance = getBalance()
+            println("✅ Kiểm tra số dư sau reset thành công: $balance")
 
-                if (verifyPin(newUserPin)) { // Gửi 80 25 với hash PIN mới
-                    println("✅ Tái xác thực PIN mới thành công. Phiên giải mã đã được thiết lập.")
+            // B5: Cập nhật trạng thái 'isDefaultPin' lên Server bằng DTO
+            val url = "$SERVER_URL/admin/set-default-pin"
+            // Sử dụng SetDefaultPinRequest để tránh lỗi "different element types"
+            val requestBody = SetDefaultPinRequest(
+                cardUuid = userCardUuid,
+                isDefaultPin = true
+            )
 
-                    // B4: KIỂM TRA ĐỌC DỮ LIỆU (ĐỌC GET_BALANCE)
-                    val balance = getBalance() // Gọi lệnh 80 52
-                    println("✅ Đọc thử số dư sau reset thành công: $balance")
-//                    try {
-//                        client.post("$SERVER_URL/admin/set-default-pin") {
-//                            contentType(ContentType.Application.Json)
-//                            setBody(mapOf("cardUuid" to userCardUuid, "isDefaultPin" to true))
-//                        }
-//                    } catch (e: Exception) {
-//                        println("Set PIN defaul lỗi") }
+            println("🌐 Gửi yêu cầu cập nhật PIN mặc định tới Server...")
+            try {
+                val resp: HttpResponse = client.post(url) {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody) // Fix lỗi IllegalStateException tại đây
+                }
+
+                if (resp.status.isSuccess()) {
+                    val bodyText = resp.bodyAsText()
+                    println("✅ Server phản hồi thành công: $bodyText")
                     finalResult = true
                 } else {
-                    println("❌ Tái xác thực bằng PIN mới thất bại. Dữ liệu sẽ bị mã hóa.")
+                    println("⚠️ Server từ chối yêu cầu (Mã lỗi: ${resp.status}).")
+                    // Nếu reset thẻ xong mà server lỗi, ta vẫn trả về false để admin biết luồng chưa khép kín
+                    return false
                 }
+            } catch (e: Exception) {
+                println("❌ Lỗi kết nối Server: ${e.message}")
+                return false
             }
 
             return finalResult
 
         } catch (e: Exception) {
-            println("❌ Lỗi xảy ra trong quá trình Reset/Verify: ${e.message}")
+            println("❌ Lỗi không xác định: ${e::class.qualifiedName}: ${e.message}")
             e.printStackTrace()
             return false
         } finally {
-            // NGẮT KẾT NỐI sau khi mọi thứ hoàn tất
+            // Luôn ngắt kết nối thẻ sau khi kết thúc
             disconnect()
         }
     }
+}
     // Các hàm encode/decode log cũ (không còn cần) đã được comment
     /*
     private fun encodeAccessLogPayload(k: Byte, s: Byte, t: LocalDateTime, d: String): ByteArray { val b = ByteArray(LOG_SIZE); b[0]=k; b[1]=s; encodeTime(t,b,2); putField(d,b,8,LOG_SIZE-8); return b }
@@ -931,4 +976,4 @@ class SmartCardRepositoryImpl(
     private fun encodeInt(v: Int, d: ByteArray, o: Int) { d[o]=(v ushr 24).toByte(); d[o+1]=(v ushr 16).toByte(); d[o+2]=(v ushr 8).toByte(); d[o+3]=v.toByte() }
     private fun decodeInt(s: ByteArray, o: Int): Int = ((s[o].toInt() and 0xFF) shl 24) or ((s[o+1].toInt() and 0xFF) shl 16) or ((s[o+2].toInt() and 0xFF) shl 8) or (s[o+3].toInt() and 0xFF)
     */
-}
+class PinIdenticalException(message: String) : Exception(message)

@@ -1,10 +1,12 @@
 package org.example.project.view.canteen
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,15 +27,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.example.project.data.CardRepositoryProvider
-// Giả định import này là cần thiết để fix lỗi DTO
 import org.example.project.model.Product
 import java.text.NumberFormat
 import java.util.Locale
 
-// DTO tạm thời cho UI (chứa ImageVector)
+// --- DTO & Mapper ---
 data class ProductItem(
     val name: String,
     val category: String,
@@ -41,16 +43,10 @@ data class ProductItem(
     val icon: ImageVector
 )
 
-// HÀM ÁNH XẠ ICON
 fun mapProductToItem(productDto: Product): ProductItem {
     val icon = when (productDto.category.trim().uppercase(Locale.ROOT)) {
         "MÓN CHÍNH" -> Icons.Default.Fastfood
-        "ĐỒ UỐNG" -> {
-            when (productDto.name.trim().uppercase(Locale.ROOT)) {
-                "NƯỚC SUỐI", "NƯỚC NGỌT" -> Icons.Default.LocalDrink
-                else -> Icons.Default.LocalCafe
-            }
-        }
+        "ĐỒ UỐNG" -> if (productDto.name.contains("Nước", true)) Icons.Default.LocalDrink else Icons.Default.LocalCafe
         "ĂN VẶT" -> Icons.Default.LunchDining
         else -> Icons.Default.Star
     }
@@ -67,207 +63,135 @@ fun CanteenScreen(
     val scope = rememberCoroutineScope()
 
     var amountText by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf<String?>(null) }
+    val selectedQuantities = remember { mutableStateMapOf<String, Int>() }
+    val quickAmounts = listOf(10_000, 20_000, 50_000, 100_000, 200_000, 500_000)
+
+    var statusMessage by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var showReceipt by remember { mutableStateOf(false) }
+    var lastTransactionItems by remember { mutableStateOf<List<Pair<ProductItem, Int>>>(emptyList()) }
 
     var balanceVersion by remember { mutableStateOf(0) }
     var isProcessing by remember { mutableStateOf(false) }
-
-    val quickAmounts = listOf(10_000, 20_000, 50_000, 100_000, 200_000)
-
     var dynamicProducts by remember { mutableStateOf<List<ProductItem>>(emptyList()) }
     var isLoadingProducts by remember { mutableStateOf(true) }
 
-    // 🔥 STATE MỚI: Dùng cho Dialog PIN Admin
+    // Admin PIN Dialog states
     var showAdminPinDialog by remember { mutableStateOf(false) }
     var adminPin by remember { mutableStateOf("") }
     var isVerifying by remember { mutableStateOf(false) }
     var adminPinError by remember { mutableStateOf<String?>(null) }
 
+    LaunchedEffect(statusMessage) {
+        if (statusMessage != null) {
+            delay(4000)
+            statusMessage = null
+        }
+    }
 
-    // LOGIC TẢI SẢN PHẨM TỪ REPOSITORY
     LaunchedEffect(Unit) {
-        isLoadingProducts = true
         scope.launch(Dispatchers.IO) {
-            val fetchedProducts = try {
-                // Gọi hàm lấy Product DTOs từ Repository
-                val productsDto = repo.getProducts()
-                productsDto.map { mapProductToItem(it) }
-            } catch (e: Exception) {
-                println("Error loading products: ${e.message}")
-                emptyList()
-            }
+            val fetched = try { repo.getProducts().map { mapProductToItem(it) } } catch (e: Exception) { emptyList() }
             withContext(Dispatchers.Main) {
-                dynamicProducts = fetchedProducts
+                dynamicProducts = fetched
                 isLoadingProducts = false
             }
         }
     }
 
-    // --- HÀM THANH TOÁN (Logic chung) ---
     val performPayment = { amount: Double ->
         scope.launch(Dispatchers.IO) {
             isProcessing = true
-
-            val success = if (userRole == "ADMIN") {
-                repo.adminTransaction("ADMIN01", -amount, "Admin Thanh toán")
-            } else {
-                repo.pay(amount, "Thanh toán dịch vụ")
-            }
-
+            val success = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", -amount, "Canteen") else repo.pay(amount, "Canteen")
             withContext(Dispatchers.Main) {
                 isProcessing = false
                 if (success) {
-                    message = "Thanh toán thành công ${formatMoney(amount)}"
+                    lastTransactionItems = dynamicProducts.filter { (selectedQuantities[it.name] ?: 0) > 0 }.map { it to (selectedQuantities[it.name] ?: 0) }
+                    showReceipt = true
                     balanceVersion++
                     onBalanceChanged()
-                    amountText = ""
+                    statusMessage = "Thanh toán thành công!" to true
                 } else {
-                    message = "Lỗi thanh toán hoặc không đủ số dư!"
+                    statusMessage = "Thanh toán thất bại! Số dư không đủ." to false
                 }
             }
         }
     }
 
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = if (userRole == "ADMIN") "Ví Server (Admin)" else "Ví Thẻ (User)",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        Text("Canteen & Dịch vụ", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
         WalletCard(balanceVersion, userRole)
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            ),
-            shape = MaterialTheme.shapes.large
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    "Giao dịch",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold
-                )
-
+        Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface)) {
+            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { if (it.all { c -> c.isDigit() }) amountText = it },
-                    label = { Text("Nhập số tiền") },
-                    trailingIcon = {
-                        if (amountText.isNotEmpty()) {
-                            IconButton(onClick = { amountText = "" }) {
-                                Icon(Icons.Default.Clear, null)
-                            }
-                        }
-                    },
+                    label = { Text("Số tiền giao dịch") },
+                    prefix = { Text("₫ ") },
                     modifier = Modifier.fillMaxWidth(),
-                    textStyle = MaterialTheme.typography.titleLarge,
-                    singleLine = true
+                    textStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    trailingIcon = { if(amountText.isNotEmpty()) IconButton(onClick = { amountText = "" }) { Icon(Icons.Default.Clear, null) } }
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Chọn nhanh mệnh giá",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        quickAmounts.forEach { amt ->
+                    Text("Gợi ý nhanh", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        quickAmounts.take(4).forEach { amt ->
                             SuggestionChip(
                                 onClick = { amountText = amt.toString() },
-                                label = {
-                                    Text(formatMoney(amt.toDouble()).replace(" VND", ""))
-                                }
+                                label = { Text(formatMoney(amt.toDouble()).replace(" ₫", "")) }
                             )
                         }
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // --- NÚT NẠP TIỀN (Không cần PIN) ---
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
-                        enabled = !isProcessing,
                         onClick = {
-                            val amount = amountText.toDoubleOrNull() ?: 0.0
-                            if (amount > 0) {
+                            val amt = amountText.toDoubleOrNull() ?: 0.0
+                            if (amt > 0) {
                                 scope.launch(Dispatchers.IO) {
                                     isProcessing = true
-
-                                    val success = if (userRole == "ADMIN") {
-                                        repo.adminTransaction("ADMIN01", amount, "Admin Nạp tiền")
-                                    } else {
-                                        repo.topUp(amount)
-                                    }
-
+                                    val ok = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", amt, "Nạp tiền") else repo.topUp(amt)
                                     withContext(Dispatchers.Main) {
                                         isProcessing = false
-                                        if (success) {
-                                            message = "Đã nạp thành công ${formatMoney(amount)}"
-                                            balanceVersion++
-                                            onBalanceChanged()
-                                            amountText = ""
-                                        } else {
-                                            message = "Lỗi nạp tiền! (Kiểm tra kết nối)"
-                                        }
+                                        if (ok) {
+                                            statusMessage = "Đã nạp ${formatMoney(amt)} thành công!" to true
+                                            balanceVersion++; onBalanceChanged(); amountText = ""
+                                        } else statusMessage = "Nạp tiền thất bại!" to false
                                     }
                                 }
                             }
                         },
-                        modifier = Modifier.weight(1f).height(56.dp),
-                        shape = MaterialTheme.shapes.medium
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        enabled = !isProcessing && amountText.isNotEmpty()
                     ) {
-                        if (isProcessing) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-                        else Icon(Icons.Default.AddCircle, null)
+                        Icon(Icons.Default.AddCard, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Nạp Tiền")
                     }
 
-                    // --- NÚT THANH TOÁN ---
                     Button(
-                        enabled = !isProcessing,
                         onClick = {
-                            val amount = amountText.toDoubleOrNull() ?: 0.0
-                            if (amount > 0) {
+                            val amt = amountText.toDoubleOrNull() ?: 0.0
+                            if (amt > 0) {
                                 if (userRole == "ADMIN") {
-                                    // 🔥 ADMIN: Mở Dialog PIN để xác thực Server
+                                    showAdminPinDialog = true
                                     adminPin = ""
                                     adminPinError = null
-                                    showAdminPinDialog = true
-                                } else {
-                                    // USER: Gọi callback PIN (PIN Thẻ)
-                                    onRequirePin { performPayment(amount) }
-                                }
+                                } else onRequirePin { performPayment(amt) }
                             }
                         },
-                        modifier = Modifier.weight(1f).height(56.dp),
-                        shape = MaterialTheme.shapes.medium,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        enabled = !isProcessing && amountText.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                     ) {
-                        Icon(Icons.Default.ShoppingCart, null)
+                        Icon(Icons.Default.ShoppingCartCheckout, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Thanh Toán")
                     }
@@ -275,260 +199,78 @@ fun CanteenScreen(
             }
         }
 
-        // Thông báo kết quả
-        if (message != null) {
+        statusMessage?.let { (msg, isSuccess) ->
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().animateContentSize(),
+                colors = CardDefaults.cardColors(containerColor = if (isSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE))
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text(message!!, style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Error, null, tint = if (isSuccess) Color(0xFF2E7D32) else Color.Red)
+                    Spacer(Modifier.width(12.dp))
+                    Text(msg, color = if (isSuccess) Color(0xFF1B5E20) else Color(0xFFB71C1C), style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
 
-        // 🔥 DIALOG MỚI: XÁC THỰC PIN ADMIN CỤC BỘ
-        if (showAdminPinDialog) {
-            AdminPinInputDialog(
-                pin = adminPin,
-                error = adminPinError,
-                isChecking = isVerifying,
-                onPinChange = { adminPin = it },
-                onDismiss = { showAdminPinDialog = false; adminPin = "" },
-                onPinConfirmed = { pin ->
-                    isVerifying = true
-                    scope.launch(Dispatchers.IO) {
-                        val isPinValid = repo.adminLogin("ADMIN01", pin) // Dùng adminLogin để xác thực
-                        withContext(Dispatchers.Main) {
-                            isVerifying = false
-                            if (isPinValid) {
-                                showAdminPinDialog = false
-                                // Thực hiện payment sau khi xác thực thành công
-                                performPayment(amountText.toDoubleOrNull() ?: 0.0)
-                            } else {
-                                adminPinError = "❌ PIN không đúng hoặc lỗi xác thực Server!"
-                            }
+        if (isLoadingProducts) LinearProgressIndicator(Modifier.fillMaxWidth())
+        else ProductSection(products = dynamicProducts, quantities = selectedQuantities, onTotalAmountChange = { amountText = it.toString() })
+    }
+
+    // --- DIALOG HÓA ĐƠN ---
+    if (showReceipt) {
+        AlertDialog(
+            onDismissRequest = { },
+            icon = { Icon(Icons.Default.Receipt, null, Modifier.size(40.dp), tint = Color(0xFF2E7D32)) },
+            title = { Text("Hóa đơn thanh toán", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Divider()
+                    lastTransactionItems.forEach { (item, qty) ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(item.name, modifier = Modifier.weight(1f)); Text("x$qty  ${formatMoney((item.price * qty).toDouble())}")
+                        }
+                    }
+                    Divider()
+                    Text("Tổng cộng: ${formatMoney(lastTransactionItems.sumOf { it.first.price * it.second }.toDouble())}",
+                        fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End, color = Color(0xFF2E7D32))
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showReceipt = false; selectedQuantities.clear(); amountText = "" }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Hoàn tất & Làm mới")
+                }
+            }
+        )
+    }
+
+    // --- DIALOG PIN ADMIN ĐÃ CẬP NHẬT ---
+    if (showAdminPinDialog) {
+        AdminPinInputDialog(
+            pin = adminPin,
+            error = adminPinError,
+            isChecking = isVerifying,
+            onPinChange = { adminPin = it },
+            onDismiss = { showAdminPinDialog = false },
+            onPinConfirmed = { pin ->
+                isVerifying = true
+                scope.launch(Dispatchers.IO) {
+                    val valid = repo.adminLogin("ADMIN01", pin)
+                    withContext(Dispatchers.Main) {
+                        isVerifying = false
+                        if (valid) {
+                            showAdminPinDialog = false
+                            performPayment(amountText.toDoubleOrNull() ?: 0.0)
+                        } else {
+                            adminPinError = "Mã PIN Admin không đúng!"
                         }
                     }
                 }
-            )
-        }
-
-
-        // DANH SÁCH SẢN PHẨM
-        if (isLoadingProducts) {
-            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
             }
-        } else {
-            ProductSection(
-                products = dynamicProducts,
-                onTotalAmountChange = { total ->
-                    amountText = if (total > 0) total.toString() else ""
-                }
-            )
-        }
+        )
     }
 }
 
-/**
- * Hiển thị số dư
- */
-@Composable
-fun WalletCard(version: Int, userRole: String) {
-    val repo = CardRepositoryProvider.current
-
-    var balance by remember { mutableStateOf(0.0) }
-
-    LaunchedEffect(version, userRole) {
-        if (userRole == "ADMIN") {
-            balance = repo.getAdminBalance("ADMIN01")
-        } else {
-            balance = try { repo.getBalance() } catch (e: Exception) { 0.0 }
-        }
-    }
-
-    val animatedBalance by animateIntAsState(balance.toInt())
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp)
-            .clip(MaterialTheme.shapes.large)
-            .background(
-                Brush.linearGradient(
-                    colors = if (userRole == "ADMIN")
-                        listOf(Color(0xFF2E7D32), Color(0xFF66BB6A))
-                    else
-                        listOf(Color(0xFF0D47A1), Color(0xFF42A5F5))
-                )
-            )
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.AccountBalanceWallet, null, tint = Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = if (userRole == "ADMIN") "Số Dư Hệ Thống (Admin)" else "Số Dư Thẻ (User)",
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            Spacer(Modifier.weight(0.5f))
-
-            Text(
-                text = "${formatMoney(animatedBalance.toDouble())}",
-                color = Color.White,
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(4.dp))
-        }
-    }
-}
-
-// --- CÁC COMPOSENT PHỤ (Product List, v.v.) ---
-
-// ProductItem đã được định nghĩa ở trên
-
-@Composable
-private fun ProductSection(
-    products: List<ProductItem>,
-    onTotalAmountChange: (Int) -> Unit
-) {
-    val quantities = remember { mutableStateMapOf<String, Int>() }
-    var page by remember { mutableStateOf(0) }
-
-    val itemsPerPage = 4
-    val totalPages = (products.size + itemsPerPage - 1) / itemsPerPage
-    val pageItems = products.drop(page * itemsPerPage).take(itemsPerPage)
-
-    val total = remember(quantities, products) {
-        derivedStateOf {
-            products.sumOf { item -> (quantities[item.name] ?: 0) * item.price }
-        }
-    }
-
-    LaunchedEffect(total.value) {
-        onTotalAmountChange(total.value)
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface),
-        shape = MaterialTheme.shapes.large
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Danh sách sản phẩm", style = MaterialTheme.typography.titleMedium)
-
-            // Phân trang
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { if (page > 0) page-- }) {
-                    Icon(Icons.Default.ChevronLeft, contentDescription = "Prev")
-                }
-                Text("Trang ${page + 1} / $totalPages")
-                IconButton(onClick = { if (page < totalPages - 1) page++ }) {
-                    Icon(Icons.Default.ChevronRight, contentDescription = "Next")
-                }
-            }
-
-            // Grid sản phẩm
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                pageItems.chunked(2).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        row.forEach { item ->
-                            val qty = quantities[item.name] ?: 0
-                            ProductCard(
-                                modifier = Modifier.weight(1f),
-                                item = item,
-                                quantity = qty,
-                                onCardClick = { if (qty == 0) quantities[item.name] = 1 },
-                                onIncrease = { quantities[item.name] = qty + 1 },
-                                onDecrease = {
-                                    val newQty = (qty - 1).coerceAtLeast(0)
-                                    if (newQty == 0) quantities.remove(item.name)
-                                    else quantities[item.name] = newQty
-                                }
-                            )
-                        }
-                        if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProductCard(
-    modifier: Modifier = Modifier,
-    item: ProductItem,
-    quantity: Int,
-    onCardClick: () -> Unit,
-    onIncrease: () -> Unit,
-    onDecrease: () -> Unit
-) {
-    val isSelected = quantity > 0
-    Card(
-        modifier = modifier.height(120.dp),
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-        ),
-        onClick = onCardClick
-    ) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(item.icon, null, tint = MaterialTheme.colorScheme.primary)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(item.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("${formatMoney(item.price.toDouble())}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            if (isSelected) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onDecrease) { Icon(Icons.Default.Remove, null) }
-                    Text(quantity.toString(), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 4.dp))
-                    IconButton(onClick = onIncrease) { Icon(Icons.Default.Add, null) }
-                }
-            }
-        }
-    }
-}
-
-fun formatMoney(amount: Double): String {
-    return try {
-        NumberFormat.getCurrencyInstance(Locale("vi", "VN")).format(amount)
-    } catch (e: Exception) { "$amount VND" }
-}
-
-
-// 🔥 COMPOSABLE MỚI: KHUNG NHẬP PIN ADMIN ĐÃ TỐI ƯU UI
+// --- CẬP NHẬT: COMPOSABLE PIN ADMIN PHONG CÁCH USER ---
 @Composable
 fun AdminPinInputDialog(
     pin: String,
@@ -542,43 +284,118 @@ fun AdminPinInputDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isChecking) onDismiss() },
-        icon = { Icon(Icons.Default.VpnKey, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Xác thực PIN Admin", textAlign = TextAlign.Center) },
+        icon = { Icon(Icons.Default.Lock, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("Xác thực mã PIN Admin", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (isChecking) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Text("Đang kiểm tra Server...", style = MaterialTheme.typography.labelMedium)
-                }
+                Text("Vui lòng nhập mã PIN quản trị viên để hoàn tất thanh toán.", style = MaterialTheme.typography.bodyMedium)
 
                 OutlinedTextField(
                     value = pin,
-                    onValueChange = {
-                        if (it.all { c -> c.isDigit() }) onPinChange(it)
-                    },
-                    label = { Text("Mã PIN") },
+                    onValueChange = { if (it.all { c -> c.isDigit() }) onPinChange(it) },
+                    label = { Text("Mã PIN Admin") },
+                    modifier = Modifier.fillMaxWidth(),
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     singleLine = true,
                     enabled = !isChecking,
-                    modifier = Modifier.fillMaxWidth(),
                     trailingIcon = {
-                        IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = !isChecking) {
-                            Icon(if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff, null)
+                        val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(icon, contentDescription = "Toggle password visibility")
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 )
-                if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+
+                if (error != null) {
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = { onPinConfirmed(pin) },
-                enabled = pin.length >= 4 && !isChecking
+                enabled = !isChecking && pin.length >= 4,
+                modifier = Modifier.widthIn(min = 100.dp)
             ) {
-                Text(if (isChecking) "Đang xác thực..." else "Xác nhận")
+                if (isChecking) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("Xác nhận")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !isChecking) { Text("Hủy") } }
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isChecking) {
+                Text("Hủy bỏ")
+            }
+        },
+        shape = RoundedCornerShape(24.dp)
     )
 }
+
+// --- GIỮ NGUYÊN CÁC COMPOSABLE KHÁC ---
+
+@Composable
+fun ProductSection(products: List<ProductItem>, quantities: MutableMap<String, Int>, onTotalAmountChange: (Int) -> Unit) {
+    val total = products.sumOf { (quantities[it.name] ?: 0) * it.price }
+    LaunchedEffect(total) { onTotalAmountChange(total) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Chọn món thực đơn", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        products.chunked(2).forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { item ->
+                    val qty = quantities[item.name] ?: 0
+                    ProductCard(modifier = Modifier.weight(1f), item = item, quantity = qty,
+                        onIncrease = { quantities[item.name] = qty + 1 },
+                        onDecrease = { if (qty > 1) quantities[item.name] = qty - 1 else quantities.remove(item.name) }
+                    )
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+fun ProductCard(modifier: Modifier, item: ProductItem, quantity: Int, onIncrease: () -> Unit, onDecrease: () -> Unit) {
+    Card(
+        modifier = modifier.height(115.dp),
+        onClick = { if (quantity == 0) onIncrease() },
+        colors = CardDefaults.cardColors(containerColor = if (quantity > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(item.icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 1, fontSize = 13.sp)
+            }
+            Text(formatMoney(item.price.toDouble()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            if (quantity > 0) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDecrease, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.RemoveCircle, null, tint = MaterialTheme.colorScheme.primary) }
+                    Text("$quantity", fontWeight = FontWeight.Bold)
+                    IconButton(onClick = onIncrease, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.AddCircle, null, tint = MaterialTheme.colorScheme.primary) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WalletCard(version: Int, userRole: String) {
+    val repo = CardRepositoryProvider.current
+    var balance by remember { mutableStateOf(0.0) }
+    LaunchedEffect(version) { balance = if (userRole == "ADMIN") repo.getAdminBalance("ADMIN01") else repo.getBalance() }
+    val animBal by animateIntAsState(balance.toInt())
+
+    Box(Modifier.fillMaxWidth().height(100.dp).clip(RoundedCornerShape(20.dp)).background(Brush.horizontalGradient(listOf(Color(0xFF1565C0), Color(0xFF1E88E5)))).padding(20.dp)) {
+        Column {
+            Text("Số dư khả dụng", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+            Text(formatMoney(animBal.toDouble()), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+fun formatMoney(amount: Double): String = NumberFormat.getCurrencyInstance(Locale("vi", "VN")).format(amount)
