@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.example.project.data.CardRepository
 import org.example.project.data.CardRepositoryProvider
+import org.example.project.model.Employee
 import org.example.project.utils.ImageUtils
 import java.awt.FileDialog
 import java.awt.Frame
@@ -43,6 +43,31 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
     var avatarBitmap: ImageBitmap? by mutableStateOf<ImageBitmap?>(null)
         private set
 
+    // ✅ SỬA LỖI THIẾU THAM SỐ TRONG loadFromServer
+    suspend fun loadFromServer() {
+        try {
+            // Giả định Admin ID là ADMIN01 (khớp với logic login)
+            val adminData = repo.getEmployeeFromServer("ADMIN")
+            if (adminData != null) {
+                employee = adminData
+            } else {
+                // 🔥 Fallback nếu không tải được: Cung cấp đủ 8 tham số
+                employee = Employee(
+                    id = "ADMIN01",
+                    name = "Administrator",
+                    dob = "01/01/1990",
+                    department = "System Admin",
+                    position = "Super User",
+                    role = "ADMIN",         // ✅ Thêm role
+                    photoPath = null,
+                    isDefaultPin = false    // ✅ Thêm isDefaultPin
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun loadAvatarFromCard() {
         try {
             val bytes = repo.getAvatar()
@@ -50,9 +75,18 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
         } catch (e: Exception) { }
     }
 
-    fun updateEmployee(name: String, dob: String, dept: String, position: String) {
-        employee = employee.copy(name = name, dob = dob, department = dept, position = position)
+    // Cập nhật thông tin (Ghi đè cả thẻ và Server)
+    // Giữ nguyên: Dùng Employee.copy() tự động giữ lại các trường không được truyền vào (role, isDefaultPin, photoPath)
+    fun updateEmployee(id: String, name: String, dob: String, dept: String, position: String) {
+        // Cập nhật object local
+        employee = employee.copy(id = id, name = name, dob = dob, department = dept, position = position)
+        // Gọi xuống Repo để lưu thẻ + Server
         repo.updateEmployee(employee)
+    }
+
+    // Hàm xin ID gợi ý từ Server
+    suspend fun generateNextId(department: String): String {
+        return repo.getNextId(department)
     }
 
     fun uploadAvatar(filePath: String) {
@@ -63,12 +97,25 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
             }
         }
     }
+
+    // New: update admin profile via server endpoint (non-blocking from UI)
+    fun updateAdminProfile(id: String, name: String, dob: String, dept: String, position: String) {
+        // Update local object immediately
+        employee = employee.copy(id = id, name = name, dob = dob, department = dept, position = position)
+        // Call server-side admin update in background
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // repo.updateAdminProfile is suspend
+                repo.updateAdminProfile(id, name, dob, dept, position)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
 }
 
 @Composable
 fun EmployeeScreen(
     vm: EmployeeViewModel = remember { EmployeeViewModel() },
-    onChangePin: ((() -> Unit) -> Unit)? = null, // vẫn giữ để không phá API cũ
+    onChangePin: ((() -> Unit) -> Unit)? = null,
     isAuthenticated: Boolean = false,
     forceEditProfile: Boolean = false,
     onForceEditConsumed: () -> Unit = {}
@@ -76,6 +123,7 @@ fun EmployeeScreen(
     LaunchedEffect(isAuthenticated) { if (isAuthenticated) vm.loadAvatarFromCard() }
 
     val emp = vm.employee // luôn cập nhật từ viewmodel
+    val isAdmin = emp.role.equals("ADMIN", ignoreCase = true)
 
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeProfileDialog by remember { mutableStateOf(false) }
@@ -93,7 +141,9 @@ fun EmployeeScreen(
             onClose = { showChangePinDialog = false },
             onSuccess = {
                 saveMessage = "Đổi PIN thành công!"
-            }
+            },
+            isAdmin = isAdmin,               // <-- pass admin flag
+            adminId = if (isAdmin) emp.id else null // <-- pass admin id when admin
         )
     }
 
@@ -129,7 +179,8 @@ fun EmployeeScreen(
             id = emp.id,
             dob = emp.dob,
             dept = emp.department,
-            pos = emp.position
+            pos = emp.position,
+            isAdmin = isAdmin // <-- pass admin flag
         )
 
         // ----- Hai nút ở dưới card -----
@@ -155,7 +206,7 @@ fun EmployeeScreen(
             Text("Change PIN")
         }
 
-        // Thông báo lưu / đổi PIN thành công (giữ nguyên)
+        // Thông báo lưu / đổi PIN thành công
         if (saveMessage != null) {
             Row(
                 modifier = Modifier
@@ -187,8 +238,6 @@ fun EmployeeScreen(
 
 /**
  * Card phía dưới “Visual Employee ID Card”
- * – Bên trái là ảnh (hoặc placeholder)
- * – Bên phải là các trường: Full Name, ID Number, Date of Birth, Department, Position
  */
 @Composable
 fun VisualEmployeeIdCard(
@@ -197,7 +246,8 @@ fun VisualEmployeeIdCard(
     id: String,
     dob: String,
     dept: String,
-    pos: String
+    pos: String,
+    isAdmin: Boolean = false // <-- new parameter
 ) {
     Card(
         modifier = Modifier
@@ -231,9 +281,12 @@ fun VisualEmployeeIdCard(
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (avatarBitmap != null) {
+                    // Show avatar only for non-admin users; admins always see default initials
+                    val shouldShowAvatar = !isAdmin && avatarBitmap != null
+
+                    if (shouldShowAvatar) {
                         Image(
-                            bitmap = avatarBitmap,
+                            bitmap = avatarBitmap!!,
                             contentDescription = "Employee photo",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
@@ -297,7 +350,6 @@ fun VisualEmployeeIdCard(
     }
 }
 
-
 @Composable
 private fun EditableInfoLine(
     label: String,
@@ -344,22 +396,22 @@ private fun StaticInfoLine(
     }
 }
 
-
-// --- LOGIC DIALOG ĐỔI PIN (CÓ HIỆN MẬT KHẨU) ---
 @Composable
 fun ChangePinDialog(
     onClose: () -> Unit,
-    onSuccess: () -> Unit
+    onSuccess: () -> Unit,
+    isAdmin: Boolean = false,   // <-- new parameter
+    adminId: String? = null     // <-- admin id when isAdmin=true
 ) {
     var oldPin by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
 
-    var isLoading by remember { mutableStateOf(false) } // ✅ Loading state
+    var isLoading by remember { mutableStateOf(false) }
 
     val repo = CardRepositoryProvider.current
-    val scope = rememberCoroutineScope() // ✅ Coroutine Scope
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onClose() },
@@ -391,26 +443,55 @@ fun ChangePinDialog(
                 onClick = {
                     if (newPin.length < 4) {
                         message = "PIN phải có ít nhất 4 ký tự."
+                        return@Button
                     } else if (newPin != confirmPin) {
                         message = "PIN mới không khớp."
-                    } else {
-                        isLoading = true
-                        message = null
+                        return@Button
+                    }
 
-                        // ✅ LOGIC XỬ LÝ BACKGROUND
+                    isLoading = true
+                    message = null
+
+                    if (isAdmin) {
+                        // Admin flow: verify admin pin via server then change via admin API
                         scope.launch(Dispatchers.IO) {
-                            // B1: Verify PIN cũ trước
+                            try {
+                                val isOldPinOk = repo.verifyAdminPin(oldPin) // suspend
+                                if (isOldPinOk) {
+                                    val changeOk = adminId?.let { repo.changeAdminPin(it, newPin) } ?: false
+                                    withContext(Dispatchers.Main) {
+                                        isLoading = false
+                                        if (changeOk) {
+                                            onSuccess()
+                                            onClose()
+                                        } else {
+                                            message = "Lỗi khi đổi PIN cho Admin (server)."
+                                        }
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        isLoading = false
+                                        message = "PIN hiện tại không đúng (Admin)."
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                withContext(Dispatchers.Main) {
+                                    isLoading = false
+                                    message = "Lỗi khi gọi server."
+                                }
+                            }
+                        }
+                    } else {
+                        // Existing user flow: verify + change on card
+                        scope.launch(Dispatchers.IO) {
                             val isOldPinOk = repo.verifyPin(oldPin)
-
                             if (isOldPinOk) {
-                                // B2: Nếu đúng -> Tiến hành đổi sang PIN mới
                                 val changeOk = repo.changePin(oldPin, newPin)
-
                                 withContext(Dispatchers.Main) {
                                     isLoading = false
                                     if (changeOk) {
-                                        // Verify lại lần nữa để đảm bảo session master key mới nhất (optional nhưng nên làm)
-                                        repo.verifyPin(newPin)
+                                        repo.verifyPin(newPin) // refresh card state
                                         onSuccess()
                                         onClose()
                                     } else {
@@ -436,7 +517,7 @@ fun ChangePinDialog(
     )
 }
 
-// Helper: Ô nhập PIN có nút mắt thần
+// Helper: Ô nhập PIN có nút mắt thần (Giữ nguyên)
 @Composable
 fun PinInputField(
     value: String,
@@ -489,13 +570,16 @@ fun PinInputField(
 fun EditableAvatar(
     currentBitmap: ImageBitmap?,
     fallbackName: String,
-    onPickImage: () -> Unit
+    onPickImage: () -> Unit,
+    isAdmin: Boolean = false // <-- added flag
 ) {
     val size = 140.dp
     Box(modifier = Modifier.size(size)) {
-        if (currentBitmap != null) {
+        val shouldShowAvatar = !isAdmin && currentBitmap != null
+
+        if (shouldShowAvatar) {
             Image(
-                bitmap = currentBitmap,
+                bitmap = currentBitmap!!,
                 contentDescription = "Avatar",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -524,13 +608,16 @@ fun EditableAvatar(
             }
         }
 
-        SmallFloatingActionButton(
-            onClick = onPickImage,
-            containerColor = MaterialTheme.colorScheme.secondary,
-            contentColor = Color.White,
-            modifier = Modifier.align(Alignment.BottomEnd).offset((-4).dp, (-4).dp)
-        ) {
-            Icon(Icons.Default.Edit, null, Modifier.size(20.dp))
+        // Hide or disable pick button for admins
+        if (!isAdmin) {
+            SmallFloatingActionButton(
+                onClick = onPickImage,
+                containerColor = MaterialTheme.colorScheme.secondary,
+                contentColor = Color.White,
+                modifier = Modifier.align(Alignment.BottomEnd).offset((-4).dp, (-4).dp)
+            ) {
+                Icon(Icons.Default.Edit, null, Modifier.size(20.dp))
+            }
         }
     }
 }

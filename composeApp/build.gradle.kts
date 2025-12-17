@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.composeHotReload)
+    alias(libs.plugins.kotlinSerialization)
 }
 
 kotlin {
@@ -25,6 +26,11 @@ kotlin {
             implementation(compose.materialIconsExtended)
             implementation("org.bouncycastle:bcprov-jdk15on:1.70")
             implementation("org.slf4j:slf4j-simple:2.0.7")
+
+            implementation("io.ktor:ktor-client-core:2.3.7")
+            implementation("io.ktor:ktor-client-cio:2.3.7") // Engine kết nối mạng
+            implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
+            implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

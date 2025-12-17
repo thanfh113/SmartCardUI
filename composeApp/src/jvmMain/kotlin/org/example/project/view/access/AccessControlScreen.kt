@@ -3,10 +3,15 @@ package org.example.project.view.access
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,21 +19,122 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.example.project.data.CardRepositoryProvider
+import org.example.project.model.AccessLogEntry
 import org.example.project.model.AccessType
 import java.time.format.DateTimeFormatter
 
 @Composable
 fun AccessControlScreen(
+    userRole: String = "USER", // ✅ Thêm tham số phân quyền
     onRestrictedArea: ((() -> Unit) -> Unit)
 ) {
     val repo = CardRepositoryProvider.current
+    val scope = rememberCoroutineScope()
     val formatter = remember { DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy") }
-    var logs by remember { mutableStateOf(repo.getAccessLogs()) }
 
-    // Màu tím bảo mật (Deep Purple) - Nhìn sang và bí mật hơn màu đỏ
+    // State lưu log (Chỉ hiển thị log thẻ nếu là User)
+    var logs by remember { mutableStateOf<List<AccessLogEntry>>(emptyList()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var logRefreshKey by remember { mutableStateOf(0) }
+
+    // Admin PIN dialog state
+    var showAdminPinDialog by remember { mutableStateOf(false) }
+
+    // Màu tím bảo mật (Deep Purple)
     val secureColor = Color(0xFF673AB7)
+
+    // Hàm load Log thẻ (cho User)
+    fun loadUserLogs() {
+        if (userRole != "ADMIN") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val currentLogs = repo.getAccessLogs()
+                    withContext(Dispatchers.Main) { logs = currentLogs }
+                } catch (_: Exception) { /* Bỏ qua lỗi nếu mất kết nối thẻ */ }
+            }
+        }
+    }
+
+    // Kích hoạt tải log ban đầu và khi có yêu cầu làm mới
+    LaunchedEffect(userRole, logRefreshKey) {
+        if (userRole != "ADMIN") {
+            loadUserLogs()
+        } else {
+            logs = emptyList() // Admin không hiển thị log thẻ
+        }
+    }
+
+    // Hàm xử lý chung (Được gọi sau khi PIN đã được xác thực thành công ở tầng cha/Dialog)
+    fun handleAccess(type: AccessType, desc: String, gate: String) {
+        scope.launch(Dispatchers.IO) {
+
+            if (userRole == "ADMIN") {
+                // --- ADMIN: Log Server ---
+                val typeStr = when(type) {
+                    AccessType.CHECK_IN -> "CHECK_IN"
+                    AccessType.CHECK_OUT -> "CHECK_OUT"
+                    else -> "RESTRICTED"
+                }
+                val adminId = "ADMIN01"
+
+                val doAccess = suspend {
+                    // Gọi hàm ghi log Admin lên Server
+                    val status = repo.adminAccessLog(adminId, typeStr, gate)
+
+                    withContext(Dispatchers.Main) {
+                        when (status) {
+                            HttpStatusCode.OK -> { message = "✅ Admin: Đã ghi log lên Server ($desc)" }
+                            HttpStatusCode.Conflict -> {
+                                val rejectionReason = when (type) {
+                                    AccessType.CHECK_IN -> "❌ Lỗi: Admin đang có phiên làm việc mở. Vui lòng Check-Out trước."
+                                    AccessType.CHECK_OUT -> "❌ Lỗi: Không tìm thấy phiên làm việc mở để Check-Out."
+                                    else -> "❌ Lỗi: Yêu cầu đã bị từ chối."
+                                }
+                                message = rejectionReason
+                            }
+                            else -> { message = "❌ Lỗi Server: (${status.value}). Kiểm tra Console Server!" }
+                        }
+                        logRefreshKey++
+                    }
+                }
+
+                // Admin không cần PIN cho Check-in/out. Đã xác thực cho Restricted Area (nếu cần).
+                doAccess()
+
+            } else {
+                // --- USER: Log Server -> Thẻ ---
+                val success = try {
+                    repo.addAccessLog(type, desc)
+                } catch (e: Exception) {
+                    println("Critical error during access: ${e.message}")
+                    false
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (success) { message = "✅ Ghi log thành công: $desc" }
+                    else {
+                        val rejectionReason = when (type) {
+                            AccessType.CHECK_IN -> "❌ Lỗi: Bạn đang có phiên làm việc mở. Vui lòng Check-Out trước."
+                            AccessType.CHECK_OUT -> "❌ Lỗi: Không tìm thấy phiên làm việc mở để Check-Out."
+                            else -> "❌ Lỗi truy cập khu vực đặc biệt hoặc lỗi kết nối!"
+                        }
+                        message = rejectionReason
+                    }
+                    logRefreshKey++
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -36,14 +142,20 @@ fun AccessControlScreen(
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         // --- HEADER ---
-        Text(
-            "Kiểm Soát Ra Vào",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if(userRole == "ADMIN") "Kiểm Soát (Admin Mode)" else "Kiểm Soát Ra Vào",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
 
-        // --- ACTION BUTTONS AREA (Dạng thẻ to) ---
+        // --- ACTION BUTTONS AREA ---
         Row(
             modifier = Modifier.fillMaxWidth().height(140.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -55,10 +167,7 @@ fun AccessControlScreen(
                 icon = Icons.AutoMirrored.Filled.Login,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    repo.addAccessLog(AccessType.CHECK_IN, "Vào cổng chính")
-                    logs = repo.getAccessLogs()
-                }
+                onClick = { handleAccess(AccessType.CHECK_IN, "Vào cổng chính", "Cổng Chính") }
             )
 
             // Nút Check-out
@@ -68,26 +177,62 @@ fun AccessControlScreen(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 color = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    repo.addAccessLog(AccessType.CHECK_OUT, "Ra cổng chính")
-                    logs = repo.getAccessLogs()
-                }
+                onClick = { handleAccess(AccessType.CHECK_OUT, "Ra cổng chính", "Cổng Chính") }
             )
 
-            // Nút Phòng Đặc Biệt
+            // 🔥 Nút Phòng Đặc Biệt: Admin show dialog cục bộ, User gọi callback cha
             AccessActionCard(
                 title = "Phòng Đặc Biệt",
-                subtitle = "Quyền riêng tư cao", // Slogan nghe nhẹ nhàng hơn
-                icon = Icons.Default.AdminPanelSettings, // Icon người quản trị
-                color = secureColor, // Màu tím
+                subtitle = "Xác thực PIN",
+                icon = Icons.Default.AdminPanelSettings,
+                color = secureColor,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    onRestrictedArea {
-                        repo.addAccessLog(
-                            AccessType.RESTRICTED_AREA,
-                            "Đã Truy Cập"
-                        )
-                        logs = repo.getAccessLogs()
+                    if (userRole == "ADMIN") {
+                        showAdminPinDialog = true
+                    } else {
+                        // User: Yêu cầu nhập PIN trước khi ghi log (handled by parent)
+                        onRestrictedArea {
+                            handleAccess(AccessType.RESTRICTED_AREA, "Đã Truy Cập", "Server Room")
+                        }
+                    }
+                }
+            )
+        }
+
+        // Thông báo trạng thái (Feedback)
+        if (message != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text(message!!, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+
+        // 🔥 DIALOG MỚI: XÁC THỰC PIN ADMIN CỤC BỘ (Tối ưu hóa UI/UX)
+        if (showAdminPinDialog) {
+            AdminPinInputDialog(
+                onDismiss = { showAdminPinDialog = false; message = null },
+                onPinConfirmed = { pin ->
+                    scope.launch(Dispatchers.IO) {
+                        val isPinValid = repo.adminLogin("ADMIN01", pin) // Dùng adminLogin để xác thực
+                        withContext(Dispatchers.Main) {
+                            if (isPinValid) {
+                                showAdminPinDialog = false
+                                // Thực hiện action sau khi xác thực thành công
+                                handleAccess(AccessType.RESTRICTED_AREA, "Đã Truy Cập Server Room", "Server Room")
+                            } else {
+                                message = "❌ PIN không đúng hoặc lỗi xác thực Server!"
+                            }
+                        }
                     }
                 }
             )
@@ -95,57 +240,118 @@ fun AccessControlScreen(
 
         Divider()
 
-        // --- HISTORY LIST ---
+        // --- HISTORY LIST (Giữ nguyên) ---
         Text(
-            "Nhật ký hoạt động gần đây",
+            text = if(userRole == "ADMIN") "Log của Admin được lưu trên Server (Xem tại tab Lịch sử)" else "Nhật ký hoạt động trên thẻ",
             style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(logs) { log ->
-                // Logic chọn Icon và màu sắc dựa trên AccessType
-                val (icon, iconColor) = when (log.accessType) {
-                    AccessType.CHECK_IN -> Icons.AutoMirrored.Filled.Login to MaterialTheme.colorScheme.primary
-                    AccessType.CHECK_OUT -> Icons.AutoMirrored.Filled.Logout to MaterialTheme.colorScheme.secondary
+        if (userRole != "ADMIN") {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(logs) { log ->
+                    val (icon, iconColor) = when (log.accessType) {
+                        AccessType.CHECK_IN -> Icons.AutoMirrored.Filled.Login to MaterialTheme.colorScheme.primary
+                        AccessType.CHECK_OUT -> Icons.AutoMirrored.Filled.Logout to MaterialTheme.colorScheme.secondary
+                        AccessType.RESTRICTED_AREA -> Icons.Default.AdminPanelSettings to secureColor
+                    }
 
-                    // Cập nhật lại logic hiển thị cho log cũ
-                    AccessType.RESTRICTED_AREA -> Icons.Default.AdminPanelSettings to secureColor
-                }
-
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    ListItem(
-                        leadingContent = {
-                            Icon(icon, contentDescription = null, tint = iconColor)
-                        },
-                        headlineContent = {
-                            // Nếu tên type cũ là RESTRICTED_AREA thì hiển thị tên tiếng Việt đẹp hơn
-                            val displayName = if (log.accessType == AccessType.RESTRICTED_AREA) "Phòng Đặc Biệt" else log.accessType.name
-                            Text(displayName, fontWeight = FontWeight.Bold, color = iconColor)
-                        },
-                        supportingContent = {
-                            Text(log.description)
-                        },
-                        trailingContent = {
-                            Text(log.time.format(formatter), style = MaterialTheme.typography.bodySmall)
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                    )
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        ListItem(
+                            leadingContent = { Icon(icon, contentDescription = null, tint = iconColor) },
+                            headlineContent = {
+                                val displayName = if (log.accessType == AccessType.RESTRICTED_AREA) "Phòng Đặc Biệt" else log.accessType.name
+                                Text(displayName, fontWeight = FontWeight.Bold, color = iconColor)
+                            },
+                            supportingContent = { Text(log.description) },
+                            trailingContent = { Text(log.time.format(formatter), style = MaterialTheme.typography.bodySmall) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                        )
+                    }
                 }
             }
+        } else {
+            Spacer(Modifier.weight(1f)) // Placeholder cho Admin
         }
     }
 }
 
-// Component nút bấm tùy chỉnh (Private để không ảnh hưởng file khác)
+// 🔥 COMPOSABLE MỚI: KHUNG NHẬP PIN ADMIN ĐÃ TỐI ƯU UI
+@Composable
+fun AdminPinInputDialog(
+    onDismiss: () -> Unit,
+    onPinConfirmed: suspend (String) -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var isChecking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = { if (!isChecking) onDismiss() },
+        icon = { Icon(Icons.Default.VpnKey, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("Xác thực PIN Admin", textAlign = TextAlign.Center) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (isChecking) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("Đang kiểm tra Server...", style = MaterialTheme.typography.labelMedium)
+                }
+
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = {
+                        localError = null
+                        if (it.all { c -> c.isDigit() }) pin = it
+                    },
+                    label = { Text("Mã PIN") },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    enabled = !isChecking,
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = !isChecking) {
+                            Icon(if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff, null)
+                        }
+                    }
+                )
+                if (localError != null) Text(localError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (pin.length < 4) {
+                        localError = "PIN phải có ít nhất 4 ký tự."
+                    } else {
+                        isChecking = true
+                        scope.launch {
+                            onPinConfirmed(pin)
+                            isChecking = false // Sẽ được reset lại khi action hoàn thành
+                        }
+                    }
+                },
+                enabled = pin.length >= 4 && !isChecking
+            ) {
+                Text(if (isChecking) "Đang xác thực..." else "Xác nhận")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isChecking) { Text("Hủy") } }
+    )
+}
+
+// Component nút bấm tùy chỉnh
 @Composable
 private fun AccessActionCard(
     title: String,
@@ -169,7 +375,7 @@ private fun AccessActionCard(
             Icon(icon, null, modifier = Modifier.size(40.dp), tint = color)
             Spacer(Modifier.height(8.dp))
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = color)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

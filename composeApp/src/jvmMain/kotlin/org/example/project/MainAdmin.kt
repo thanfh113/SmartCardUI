@@ -8,11 +8,11 @@ import org.example.project.view.theme.SmartCardTheme
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Smart Card System (DEV MODE)"
+        title = "Hệ Thống Quản Trị (MÁY CHỦ ADMIN)"
     ) {
         SmartCardTheme {
-            // Mặc định chạy User cho dễ test
-            DesktopApp(isAdminLauncher = false)
+            // isAdminLauncher = true -> Chạy chế độ Admin (Login Server)
+            DesktopApp(isAdminLauncher = true)
         }
     }
 }

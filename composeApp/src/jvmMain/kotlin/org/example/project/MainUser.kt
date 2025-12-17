@@ -8,10 +8,10 @@ import org.example.project.view.theme.SmartCardTheme
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Smart Card System (DEV MODE)"
+        title = "Dịch Vụ Thẻ Thông Minh (MÁY TRẠM USER)"
     ) {
         SmartCardTheme {
-            // Mặc định chạy User cho dễ test
+            // isAdminLauncher = false -> Chạy chế độ User (Quẹt thẻ)
             DesktopApp(isAdminLauncher = false)
         }
     }

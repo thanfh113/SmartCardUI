@@ -1,4 +1,4 @@
-package org.example.project
+package org.example.project.view
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -14,55 +14,79 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import org.example.project.data.CardRepositoryProvider
-import org.example.project.view.access.AccessControlScreen
-import org.example.project.view.canteen.CanteenScreen
-import org.example.project.view.common.PinDialog
-import org.example.project.view.employee.EmployeeScreen
-import org.example.project.view.history.HistoryScreen
-import kotlin.system.exitProcess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.example.project.data.CardRepositoryProvider
+import org.example.project.view.access.AccessControlScreen
+import org.example.project.view.admin.AdminScreen
+import org.example.project.view.canteen.CanteenScreen
 import org.example.project.view.common.CreatePinDialog
+import org.example.project.view.common.PinDialog
+import org.example.project.view.employee.EmployeeScreen
+import org.example.project.view.employee.EmployeeViewModel
+import org.example.project.view.history.HistoryScreen
+import kotlin.system.exitProcess
 
 enum class MainScreen(val title: String, val icon: ImageVector) {
     SCAN("Kết nối", Icons.Default.SettingsInputAntenna),
     EMPLOYEE_INFO("Hồ sơ", Icons.Default.Person),
     ACCESS_CONTROL("Ra/Vào", Icons.Default.Security),
     CANTEEN("Căng tin", Icons.Default.Restaurant),
-    HISTORY("Lịch sử", Icons.Default.History)
+    HISTORY("Lịch sử", Icons.Default.History),
+    ADMIN("Quản lý thẻ", Icons.Default.AdminPanelSettings)
 }
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun DesktopApp() {
+fun DesktopApp(isAdminLauncher: Boolean = false) {
     val repo = CardRepositoryProvider.current
     val scope = rememberCoroutineScope()
-    var currentScreen by remember { mutableStateOf(MainScreen.SCAN) }
 
-    // State quản lý kết nối
+    // Helper: safely extract 'role' from server response via reflection (works for data class, POJO or Map-like)
+    // Giữ nguyên hàm này nếu bạn chưa sửa Employee DTO để chứa 'role'
+    fun extractRole(emp: Any?): String? {
+        if (emp == null) return null
+        return try {
+            val cls = emp::class.java
+            // try field first
+            try {
+                val field = cls.getDeclaredField("role")
+                field.isAccessible = true
+                field.get(emp) as? String
+            } catch (e: NoSuchFieldException) {
+                // try getter
+                val getter = cls.methods.firstOrNull { it.name.equals("getRole", ignoreCase = true) }
+                getter?.invoke(emp) as? String
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Nếu là Admin Launcher, mặc định vào màn Admin, ngược lại vào Scan
+    var currentScreen by remember {
+        mutableStateOf(if (isAdminLauncher) MainScreen.ADMIN else MainScreen.SCAN)
+    }
+
+    // State chung
     var isAuthenticated by remember { mutableStateOf(false) }
-    var isCardGenuine by remember { mutableStateOf<Boolean?>(null) }
-    var connectionError by remember { mutableStateOf<String?>(null) }
     var isConnected by remember { mutableStateOf(false) }
+    var connectionError by remember { mutableStateOf<String?>(null) }
 
-    // State quản lý trạng thái thẻ (PIN, Khóa, Số dư)
+    // State thẻ (chỉ dùng cho User)
     var cardState by remember { mutableStateOf(repo.getCardState()) }
     var forceEditProfile by remember { mutableStateOf(false) }
 
-    // Hàm ép cập nhật lại trạng thái thẻ từ phần cứng
-    fun refreshCardState() {
-        // Lấy state mới từ repo
-        val newState = repo.getCardState()
-        // QUAN TRỌNG: .copy() tạo ra một instance mới để Compose nhận biết thay đổi và vẽ lại UI
-        // Nếu không có .copy(), Compose có thể nghĩ object chưa đổi và không cập nhật dòng chữ đỏ.
-        cardState = newState.copy()
-    }
+    // State phân quyền: Nếu chạy Launcher Admin -> Role là ADMIN, ngược lại là USER
+    var userRole by remember { mutableStateOf(if (isAdminLauncher) "ADMIN" else "USER") }
+
+    // State login Admin: Nếu là Launcher Admin -> Tự hiện dialog login ngay khi mở app
+    var showAdminLogin by remember { mutableStateOf(isAdminLauncher) }
 
     // Dialog state
     var showPinDialog by remember { mutableStateOf(false) }
@@ -70,41 +94,44 @@ fun DesktopApp() {
     var showActionPinDialog by remember { mutableStateOf(false) }
     var pendingAction: (() -> Unit)? by remember { mutableStateOf(null) }
 
+    // 🔥 STATE MỚI: Buộc đổi PIN
+    var showForcePinChangeDialog by remember { mutableStateOf(false) }
+    // 🔥 STATE MỚI: Lưu PIN mặc định (oldPin) vừa nhập
+    var pendingOldPin by remember { mutableStateOf<String?>(null) }
+
+    // Hàm refresh trạng thái thẻ (chỉ có tác dụng khi User dùng thẻ thật)
+    fun refreshCardState() {
+        if (userRole != "ADMIN") {
+            try {
+                val newState = repo.getCardState()
+                cardState = newState.copy()
+            } catch (e: Exception) { /* Bỏ qua lỗi nếu mất kết nối thẻ */ }
+        }
+    }
+
+
+    // --- CÁC DIALOG KÍCH HOẠT/NHẬP PIN CHO USER ---
+    // (Khối CreatePinDialog giữ nguyên)
     if (showCreatePinDialog) {
         CreatePinDialog(
             onDismiss = {
-                // Nếu bấm hủy thì quay về màn hình chờ, ngắt kết nối
                 showCreatePinDialog = false
                 isConnected = false
                 repo.disconnect()
             },
             onConfirm = { newPin ->
-                // Chạy setup dưới background
                 scope.launch(Dispatchers.IO) {
                     val success = repo.setupFirstPin(newPin)
-
                     withContext(Dispatchers.Main) {
                         if (success) {
-                            // 1) Setup PIN xong => đăng nhập luôn
                             isAuthenticated = true
                             showCreatePinDialog = false
-
-                            // 2) Khởi tạo thông tin nhân viên: sinh ID NV00x + ghi xuống thẻ
-                            try {
-                                repo.initEmployeeAfterActivation()
-                            } catch (e: Exception) {
-                                connectionError = "Lỗi khi khởi tạo thông tin nhân viên: ${e.message}"
-                            }
-
-                            // 3) Cập nhật state thẻ + chuyển sang màn hồ sơ
+                            try { repo.initEmployeeAfterActivation() } catch (_: Exception) {}
                             refreshCardState()
                             currentScreen = MainScreen.EMPLOYEE_INFO
-
-                            // 4) Báo cho màn EmployeeScreen rằng cần mở ChangeProfileDialog lần đầu
                             forceEditProfile = true
                         } else {
-                            connectionError = "Lỗi khi kích hoạt thẻ!"
-                            showCreatePinDialog = false
+                            connectionError = "Lỗi kích hoạt thẻ!"
                             isConnected = false
                         }
                     }
@@ -112,42 +139,63 @@ fun DesktopApp() {
             }
         )
     }
-    // --- LOGIC XỬ LÝ PIN (Đã sửa để cập nhật UI khi nhập sai) ---
+
+    // 🔥 SỬA: Logic PinDialog để kiểm tra PIN mặc định và lưu PIN
     if (showPinDialog) {
         PinDialog(
-            title = "Mở khóa thẻ",
+            title = "Mở khóa thẻ (User)",
             cardState = cardState,
-            onDismiss = { /* Không cho tắt */ },
+            onDismiss = { /* Bắt buộc nhập mới vào được */ },
             onPinOk = { pin ->
-                // ✅ CHẠY TRÊN BACKGROUND THREAD
                 scope.launch(Dispatchers.IO) {
-                    val ok = repo.verifyPin(pin)
+                    val ok = repo.verifyPin(pin) // 1. Xác thực PIN (Offline)
 
-                    // Cập nhật UI trên Main Thread
                     withContext(Dispatchers.Main) {
-                        refreshCardState() // Update số lần sai
+                        refreshCardState()
                         if (ok) {
-                            isAuthenticated = true
-                            showPinDialog = false
-                            currentScreen = MainScreen.EMPLOYEE_INFO
+                            val isAuthenticatedByRSA = repo.authenticateCard()
+
+                            if (!isAuthenticatedByRSA) {
+                                // Nếu Ký RSA thất bại (dù PIN đúng), có thể Master Key bị lỗi hoặc lỗi thẻ
+                                connectionError = "Thẻ không hợp lệ (Lỗi xác thực RSA sau khi nhập PIN)!"
+                                return@withContext
+                            }
+                            // 2. Nếu PIN thẻ OK -> Kiểm tra Server (trạng thái PIN)
+                            val cardUuid = repo.getCardIDHex()
+                            val empInfo = repo.getEmployeeFromServer(cardUuid)
+
+                            showPinDialog = false // Đóng PinDialog
+
+                            if (empInfo?.isDefaultPin == true) { // 3. Nếu đang dùng PIN mặc định
+                                // BUỘC ĐỔI PIN
+                                showForcePinChangeDialog = true
+                                pendingOldPin = pin // ✅ LƯU PIN MẶC ĐỊNH VỪA NHẬP VÀO STATE
+                                connectionError = "⚠️ Vui lòng đổi mã PIN để kích hoạt thẻ!"
+                            } else {
+                                // PIN đã được User đổi -> Login thành công
+                                isAuthenticated = true
+                                // Cập nhật role từ Server
+                                userRole = empInfo?.role ?: "USER"
+                                currentScreen = MainScreen.EMPLOYEE_INFO
+                            }
+                        } else {
+                            // PIN sai (Giữ nguyên logic cũ)
                         }
-                        // Nếu sai, PinDialog sẽ tự tắt loading nhờ LaunchedEffect(cardState)
                     }
                 }
             }
         )
     }
 
+    // Dialog xác nhận giao dịch (Dùng chung)
     if (showActionPinDialog) {
         PinDialog(
-            title = "Xác nhận giao dịch",
+            title = "Xác nhận PIN",
             cardState = cardState,
             onDismiss = { showActionPinDialog = false },
             onPinOk = { pin ->
-                // ✅ CHẠY TRÊN BACKGROUND THREAD
                 scope.launch(Dispatchers.IO) {
                     val ok = repo.verifyPin(pin)
-
                     withContext(Dispatchers.Main) {
                         refreshCardState()
                         if (ok) {
@@ -161,11 +209,62 @@ fun DesktopApp() {
         )
     }
 
-    // --- GIAO DIỆN CHÍNH ---
+    // 🔥 KHỐI DIALOG BUỘC ĐỔI PIN (Dùng lại CreatePinDialog)
+    if (showForcePinChangeDialog) {
+        CreatePinDialog(
+            // Không cho hủy nếu chưa đổi PIN thành công
+            onDismiss = {
+                connectionError = "Thẻ chưa được kích hoạt hoàn toàn. Vui lòng đổi PIN!"
+                // Thoát ứng dụng nếu người dùng đóng dialog buộc đổi PIN
+                exitProcess(0)
+            },
+            onConfirm = { newPin ->
+                val oldPin = pendingOldPin // Lấy PIN cũ
+                if (oldPin == null) {
+                    connectionError = "❌ Lỗi bảo mật: Không tìm thấy PIN cũ (Lỗi ứng dụng)."
+                    return@CreatePinDialog
+                }
+
+                scope.launch(Dispatchers.IO) {
+                    val cardUuid = repo.getCardIDHex()
+
+                    // 1. Ghi PIN mới vào Thẻ
+                    // ✅ SỬA LỖI: Truyền đủ 2 tham số (oldPin và newPin)
+                    val cardSuccess = repo.changePin(oldPin, newPin)
+
+                    // 2. Báo Server set isDefaultPin = false
+                    val serverSuccess = if (cardSuccess) {
+                        repo.reportPinChanged(cardUuid)
+                    } else false
+
+                    withContext(Dispatchers.Main) {
+                        if (cardSuccess && serverSuccess) {
+                            showForcePinChangeDialog = false
+                            isAuthenticated = true // Xác thực hoàn toàn
+
+                            // Cập nhật role cuối cùng
+                            val empInfo = repo.getEmployeeFromServer(cardUuid)
+                            userRole = empInfo?.role ?: "USER"
+
+                            currentScreen = MainScreen.EMPLOYEE_INFO
+                            connectionError = "✅ Đổi PIN thành công! Đăng nhập hoàn tất."
+                            pendingOldPin = null // Xóa PIN cũ khỏi bộ nhớ
+                        } else {
+                            connectionError = "❌ Lỗi: Không thể đổi PIN trên Thẻ/Server. Vui lòng thử lại."
+                            // Giữ dialog mở để người dùng thử lại
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+
+    // --- GIAO DIỆN CHÍNH (Giữ nguyên) ---
     Row(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
 
-        // 1. THANH ĐIỀU HƯỚNG BÊN TRÁI (Chỉ hiện khi đã đăng nhập)
-        if (isAuthenticated && isConnected) {
+        // 1. MENU BÊN TRÁI (Hiển thị khi đã Login thành công)
+        if (isAuthenticated) {
             NavigationRail(
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.primary,
@@ -178,8 +277,16 @@ fun DesktopApp() {
                     )
                 }
             ) {
-                // Chỉ hiện các tab chức năng, bỏ tab SCAN
-                MainScreen.values().filter { it != MainScreen.SCAN }.forEach { screen ->
+                // LOGIC LỌC MENU:
+                // - Ẩn màn hình SCAN
+                // - Nếu là User -> Ẩn màn hình ADMIN
+                MainScreen.values().filter { screen ->
+                    when {
+                        screen == MainScreen.SCAN -> false
+                        userRole != "ADMIN" && screen == MainScreen.ADMIN -> false
+                        else -> true
+                    }
+                }.forEach { screen ->
                     NavigationRailItem(
                         selected = currentScreen == screen,
                         onClick = { currentScreen = screen },
@@ -191,63 +298,79 @@ fun DesktopApp() {
                 }
                 Spacer(Modifier.weight(1f))
 
-                // Nút Đăng xuất / Thoát
                 NavigationRailItem(
                     selected = false,
-                    onClick = { exitProcess(0) },
-                    icon = { Icon(Icons.Default.ExitToApp, contentDescription = "Thoát") },
+                    onClick = {
+                        // Logout Logic
+                        isAuthenticated = false
+                        isConnected = false
+                        userRole = if (isAdminLauncher) "ADMIN" else "USER"
+                        repo.disconnect()
+
+                        // Nếu là Admin Launcher logout -> Hiện lại dialog login
+                        if (isAdminLauncher) {
+                            showAdminLogin = true
+                        } else {
+                            currentScreen = MainScreen.SCAN
+                        }
+                    },
+                    icon = { Icon(Icons.Default.ExitToApp, "Thoát") },
                     label = { Text("Thoát") }
                 )
             }
         }
 
-        // 2. NỘI DUNG CHÍNH (Bên phải)
+        // 2. NỘI DUNG CHÍNH (Giữ nguyên)
         Box(
             modifier = Modifier.weight(1f).fillMaxSize().padding(if (isAuthenticated) 24.dp else 0.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Logic hiển thị màn hình
-            if (!isConnected || currentScreen == MainScreen.SCAN || !isAuthenticated) {
-                // --- MÀN HÌNH CHỜ / QUÉT THẺ (Welcome Screen) ---
-                WelcomeScreen(
-                    isConnected = isConnected,
-                    connectionError = connectionError,
-                    isGenuine = isCardGenuine,
-                    onConnect = {
-                        connectionError = null
-                        val connected = repo.connect()
-                        isConnected = connected
-                        if (!connected) {
-                            connectionError = "Không tìm thấy đầu đọc thẻ!"
-                            return@WelcomeScreen
-                        }
-
-                        val genuine = repo.authenticateCard()
-                        isCardGenuine = genuine
-                        if (!genuine) {
-                            connectionError = "Cảnh báo: Thẻ không hợp lệ!"
-                            return@WelcomeScreen
-                        }
-
-                        scope.launch(Dispatchers.IO) {
-                            val isInitialized = repo.checkCardInitialized()
-
-                            withContext(Dispatchers.Main) {
-                                if (!isInitialized) {
-                                    // -> Chưa có PIN -> Hiện Dialog tạo mới
-                                    showCreatePinDialog = true
-                                } else {
-                                    // -> Đã có PIN -> Hiện Dialog đăng nhập
-                                    refreshCardState()
-                                    showPinDialog = true
-                                }
-                            }
-                        }
+            if (!isAuthenticated) {
+                if (isAdminLauncher) {
+                    // ✅ Admin Launcher: Chỉ hiện background chờ Dialog Login bật lên
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Vui lòng đăng nhập Quản trị viên...", style = MaterialTheme.typography.bodyLarge)
                     }
-                )
+                } else {
+                    // ✅ User Launcher: Hiện màn hình Scan thẻ (ẩn nút Admin Login)
+                    UnifiedLoginScreen(
+                        connectionError = connectionError,
+                        onUserConnect = {
+                            // Logic User Connect
+                            connectionError = null
+                            val connected = repo.connect()
+                            isConnected = connected
+
+                            if (connected) {
+//                                if (!repo.authenticateCard()) {
+//                                    connectionError = "Thẻ không hợp lệ (Sai Master Key)!"
+//                                    return@UnifiedLoginScreen
+//                                }
+                                scope.launch(Dispatchers.IO) {
+                                    val isInitialized = repo.checkCardInitialized()
+                                    withContext(Dispatchers.Main) {
+                                        if (!isInitialized) {
+                                            // Chặn User tự tạo thẻ mới
+                                            connectionError = "Thẻ chưa được định dạng! Vui lòng liên hệ Admin để cấp thẻ."
+                                            repo.disconnect()
+                                        } else {
+                                            // Thẻ OK -> Set role USER -> Hiện nhập PIN
+                                            userRole = "USER"
+                                            refreshCardState()
+                                            showPinDialog = true
+                                        }
+                                    }
+                                }
+                            } else {
+                                connectionError = "Không tìm thấy thẻ!"
+                            }
+                        },
+                        onAdminLoginClick = { /* Không dùng trong mode User Only */ },
+                        showAdminButton = false // Ẩn nút Admin ở màn hình User
+                    )
+                }
             } else {
-                // --- CÁC MÀN HÌNH CHỨC NĂNG ---
-                // Hiệu ứng chuyển cảnh mượt mà
+                // --- KHI ĐÃ ĐĂNG NHẬP THÀNH CÔNG (Giữ nguyên) ---
                 AnimatedContent(
                     targetState = currentScreen,
                     transitionSpec = { fadeIn() with fadeOut() }
@@ -255,24 +378,50 @@ fun DesktopApp() {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         shape = MaterialTheme.shapes.medium,
-                        shadowElevation = 4.dp, // Đổ bóng cho khung nội dung
+                        shadowElevation = 4.dp,
                         color = MaterialTheme.colorScheme.surface
                     ) {
                         when (screen) {
-                            MainScreen.EMPLOYEE_INFO -> EmployeeScreen(
-                                onChangePin = { act -> pendingAction = act; showActionPinDialog = true },
-                                isAuthenticated = isAuthenticated,
-                                forceEditProfile = forceEditProfile,
-                                onForceEditConsumed = { forceEditProfile = false }
-                            )
+                            // Màn hình dành riêng cho Admin (Quản lý nhân sự)
+                            MainScreen.ADMIN -> AdminScreen()
+
+                            // Màn hình Thông tin cá nhân
+                            MainScreen.EMPLOYEE_INFO -> {
+                                val vm = remember { EmployeeViewModel() }
+                                LaunchedEffect(userRole) {
+                                    // Nếu là Admin -> Load info từ Server
+                                    if (userRole == "ADMIN") {
+                                        vm.loadFromServer()
+                                    }
+                                    // Nếu là User -> VM tự load từ thẻ (mặc định)
+                                }
+                                EmployeeScreen(
+                                    vm = vm,
+                                    onChangePin = { act -> pendingAction = act; showActionPinDialog = true },
+                                    isAuthenticated = isAuthenticated,
+                                    forceEditProfile = forceEditProfile,
+                                    onForceEditConsumed = { forceEditProfile = false }
+                                )
+                            }
+
+                            // ✅ SỬA 1: Truyền userRole vào AccessControlScreen
                             MainScreen.ACCESS_CONTROL -> AccessControlScreen(
+                                userRole = userRole,
                                 onRestrictedArea = { act -> pendingAction = act; showActionPinDialog = true }
                             )
+
+                            // ✅ SỬA 2: Truyền userRole vào CanteenScreen
                             MainScreen.CANTEEN -> CanteenScreen(
+                                userRole = userRole,
                                 onRequirePin = { act -> pendingAction = act; showActionPinDialog = true },
                                 onBalanceChanged = { refreshCardState() }
                             )
-                            MainScreen.HISTORY -> HistoryScreen()
+
+                            // ✅ SỬA 3: Truyền userRole vào HistoryScreen
+                            MainScreen.HISTORY -> HistoryScreen(
+                                userRole = userRole
+                            )
+
                             else -> {}
                         }
                     }
@@ -280,23 +429,38 @@ fun DesktopApp() {
             }
         }
     }
+
+    // --- DIALOG ĐĂNG NHẬP ADMIN (SERVER) (Giữ nguyên) ---
+    if (showAdminLogin) {
+        AdminLoginDialog(
+            onDismiss = {
+                showAdminLogin = false
+                // Nếu là Admin Launcher mà tắt dialog login -> Thoát App luôn
+                if (isAdminLauncher) exitProcess(0)
+            },
+            onLoginSuccess = {
+                userRole = "ADMIN"
+                isAuthenticated = true
+                isConnected = true
+                currentScreen = MainScreen.ADMIN // Vào thẳng Dashboard Admin
+                showAdminLogin = false
+            }
+        )
+    }
 }
 
-// Layout riêng cho màn hình chờ cho đẹp
+// --- CÁC COMPOSABLE PHỤ TRỢ (Giữ nguyên) ---
+
 @Composable
-fun WelcomeScreen(
-    isConnected: Boolean,
+fun UnifiedLoginScreen(
     connectionError: String?,
-    isGenuine: Boolean?,
-    onConnect: () -> Unit
+    onUserConnect: () -> Unit,
+    onAdminLoginClick: () -> Unit,
+    showAdminButton: Boolean = true
 ) {
     Box(
         modifier = Modifier.fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.background)
-                )
-            ),
+            .background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.background))),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -304,48 +468,77 @@ fun WelcomeScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.widthIn(max = 400.dp)
         ) {
-            // Logo / Icon lớn
-            Icon(
-                imageVector = if (isConnected) Icons.Default.VerifiedUser else Icons.Default.Sensors,
-                contentDescription = null,
-                modifier = Modifier.size(120.dp).padding(bottom = 24.dp),
-                tint = if (connectionError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-            )
-
-            Text(
-                "Hệ Thống Thẻ Thông Minh",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                if (connectionError != null) connectionError!!
-                else if (isGenuine == true) "Đang xác thực người dùng..."
-                else "Vui lòng đặt thẻ lên đầu đọc",
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (connectionError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
+            Icon(Icons.Default.VerifiedUser, null, Modifier.size(100.dp).padding(bottom = 16.dp), tint = MaterialTheme.colorScheme.primary)
+            Text("Hệ Thống Thẻ Thông Minh", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(32.dp))
 
-            // Nút bấm lớn
-            if (!isConnected || connectionError != null) {
-                Button(
-                    onClick = onConnect,
+            Button(
+                onClick = onUserConnect,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Icon(Icons.Default.Nfc, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Quét Thẻ Nhân Viên")
+            }
+
+            if (showAdminButton) {
+                Spacer(Modifier.height(16.dp))
+                OutlinedButton(
+                    onClick = onAdminLoginClick,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = MaterialTheme.shapes.medium,
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
-                    Icon(Icons.Default.Nfc, contentDescription = null)
+                    Icon(Icons.Default.AdminPanelSettings, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Kết nối & Quét thẻ", style = MaterialTheme.typography.titleMedium)
+                    Text("Đăng nhập Quản trị viên")
                 }
-            } else {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+
+            if (connectionError != null) {
+                Spacer(Modifier.height(16.dp))
+                Text(connectionError, color = MaterialTheme.colorScheme.error)
             }
         }
     }
+}
+
+@Composable
+fun AdminLoginDialog(onDismiss: () -> Unit, onLoginSuccess: () -> Unit) {
+    val repo = CardRepositoryProvider.current
+    val scope = rememberCoroutineScope()
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Đăng nhập Admin (Server)") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it },
+                    label = { Text("Mã PIN Quản trị") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                scope.launch {
+                    isLoading = true
+                    // Gọi Server xác thực (ID cố định ADMIN01)
+                    val ok = repo.adminLogin("ADMIN01", pin)
+                    isLoading = false
+                    if (ok) onLoginSuccess() else error = "Sai mã PIN hoặc lỗi Server!"
+                }
+            }, enabled = !isLoading) {
+                Text(if (isLoading) "Đang kiểm tra..." else "Đăng nhập")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Hủy") } }
+    )
 }
