@@ -66,7 +66,7 @@ interface CardRepository {
     suspend fun adminUnlockCard(adminPin: String): Boolean
     suspend fun adminResetPin(adminPin: String, newPin: String): Boolean
     suspend fun adminVerifyWithAdminCard(adminPin: String): Boolean
-    suspend fun adminLockCard(adminPin: String): Boolean
+    suspend fun adminLockUserCard(adminPin: String, userCardUuid: String): Boolean
 
     suspend fun adminUnlockUserCard(adminPin: String, userCardUuid: String): Boolean
     suspend fun adminResetUserPin(

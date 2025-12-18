@@ -191,6 +191,12 @@ class SmartCardRepositoryImpl(
     }
 
     override fun verifyPin(input: String): Boolean {
+        // Kiểm tra thẻ có bị khóa không trước khi verify
+        if (isCardLocked()) {
+            println("⚠️ Thẻ đang bị khóa bởi Admin, không thể verify PIN")
+            return false
+        }
+
         val salt = getSaltFromCard() ?: return false
         val derivedKey = computeArgon2Hash(input, salt)
         val apdu = byteArrayOf(0x80.toByte(), INS_VERIFY_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
@@ -796,19 +802,70 @@ class SmartCardRepositoryImpl(
     }
     // THÊM: Kiểm tra thẻ có bị khóa không
     override fun isCardLocked(): Boolean {
-        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_CHECK_LOCKED, 0x00, 0x00, 0x01))
-        if (!isSw9000(resp)) return false
-        val data = dataPart(resp)
-        return data.isNotEmpty() && data[0] == 0x01.toByte()
+        return try {
+            val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_CHECK_LOCKED, 0x00, 0x00, 0x01))
+            // Nếu thẻ trả về 9000 và data[0] là 1, HOẶC thẻ trả về mã lỗi 6283
+            val data = dataPart(resp)
+            val isLocked = (isSw9000(resp) && data.isNotEmpty() && data[0] == 0x01.toByte()) ||
+                    (resp.size >= 2 && resp[resp.size-2] == 0x62.toByte() && resp[resp.size-1] == 0x83.toByte())
+
+            if (isLocked) println("Thẻ đang bị khóa!")
+            isLocked
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // THÊM: Admin khóa thẻ (phải verify PIN admin trước)
-    override suspend fun adminLockCard(adminPin: String): Boolean {
-        val verified = runBlocking { verifyAdminPin(adminPin) || adminLogin(ADMIN_ID, adminPin) }
-        if (!verified) return false
+    override suspend fun adminLockUserCard(
+        adminPin: String,
+        userCardUuid: String
+    ): Boolean {
+        return try {
+            println("🔒 [adminLockUserCard] Đang cố gắng khóa thẻ User...")
 
-        val apdu = byteArrayOf(0x80.toByte(), INS_LOCK_CARD, 0x00, 0x00)
-        return isSw9000(api.sendApdu(apdu))
+            // Bước 1: Kết nối với thẻ User (đặt thẻ User lên đầu đọc)
+            if (!connect()) {
+                println("❌ Không thể kết nối với thẻ User")
+                return false
+            }
+
+            // Bước 2: Gửi lệnh LOCK_CARD (0x2B) trực tiếp
+            // KHÔNG CẦN verify PIN vì SecurityManager đã loại bỏ yêu cầu validated
+            val apdu = byteArrayOf(0x80.toByte(), INS_LOCK_CARD, 0x00, 0x00)
+            val lockSuccess = isSw9000(api.sendApdu(apdu))
+
+            if (lockSuccess) {
+                println("✅ Đã khóa thẻ vật lý thành công")
+
+                // Bước 3: Cập nhật trạng thái lên Server
+                try {
+                    val resp = client.post("$SERVER_URL/change-status") {
+                        contentType(ContentType.Application.Json)
+                        setBody(ChangeStatusRequest(userCardUuid, false)) // isActive = false
+                    }
+
+                    if (resp.status == HttpStatusCode.OK) {
+                        println("✅ Đã cập nhật trạng thái khóa lên Server")
+                    } else {
+                        println("⚠️ Khóa thẻ thành công nhưng không cập nhật được Server")
+                    }
+                } catch (e: Exception) {
+                    println("⚠️ Lỗi cập nhật Server: ${e.message}")
+                }
+            } else {
+                println("❌ Khóa thẻ vật lý thất bại")
+            }
+
+            disconnect()
+            return lockSuccess
+
+        } catch (e: Exception) {
+            println("❌ Exception trong adminLockUserCard: ${e.message}")
+            e.printStackTrace()
+            disconnect()
+            return false
+        }
     }
 
     // THÊM: Admin mở khóa thẻ (phải verify PIN admin trước)
@@ -851,30 +908,52 @@ class SmartCardRepositoryImpl(
     // THÊM: Quy trình đầy đủ Admin mở khóa thẻ User
     // THÊM: Quy trình đầy đủ Admin mở khóa thẻ User
     override suspend fun adminUnlockUserCard(
-        adminPin: String, // PIN Admin (đã verified ở tầng trên)
+        adminPin: String,
         userCardUuid: String
     ): Boolean {
         return try {
-            println("📢 Đang cố gắng kết nối với thẻ USER để mở khóa...")
-            // Bước 1: Kết nối với thẻ User
-            if (!connect()) return false
+            println("🔓 [adminUnlockUserCard] Đang cố gắng mở khóa thẻ User...")
 
-            // Bước 2: Thực hiện mở khóa
-            val unlockSuccess = adminUnlockCard(adminPin)
+            // Bước 1: Kết nối với thẻ User
+            if (!connect()) {
+                println("❌ Không thể kết nối với thẻ User")
+                return false
+            }
+
+            // Bước 2: Gửi lệnh UNLOCK_CARD (0x2C)
+            val apdu = byteArrayOf(0x80.toByte(), INS_UNLOCK_CARD, 0x00, 0x00)
+            val unlockSuccess = isSw9000(api.sendApdu(apdu))
 
             if (unlockSuccess) {
-                println("✅ Đã mở khóa thẻ thành công")
+                println("✅ Đã mở khóa thẻ vật lý thành công")
+
+                // Bước 3: Cập nhật trạng thái lên Server
+                try {
+                    val resp = client.post("$SERVER_URL/change-status") {
+                        contentType(ContentType.Application.Json)
+                        setBody(ChangeStatusRequest(userCardUuid, true)) // isActive = true
+                    }
+
+                    if (resp.status == HttpStatusCode.OK) {
+                        println("✅ Đã cập nhật trạng thái mở khóa lên Server")
+                    } else {
+                        println("⚠️ Mở khóa thẻ thành công nhưng không cập nhật được Server")
+                    }
+                } catch (e: Exception) {
+                    println("⚠️ Lỗi cập nhật Server: ${e.message}")
+                }
             } else {
-                println("❌ Thao tác mở khóa thẻ thất bại.")
+                println("❌ Mở khóa thẻ vật lý thất bại")
             }
 
             disconnect()
-            unlockSuccess
+            return unlockSuccess
 
         } catch (e: Exception) {
+            println("❌ Exception trong adminUnlockUserCard: ${e.message}")
             e.printStackTrace()
             disconnect()
-            false
+            return false
         }
     }
 

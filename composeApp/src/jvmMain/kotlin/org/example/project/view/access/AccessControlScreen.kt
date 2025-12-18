@@ -77,9 +77,8 @@ fun AccessControlScreen(
     // Hàm xử lý chung (Được gọi sau khi PIN đã được xác thực thành công ở tầng cha/Dialog)
     fun handleAccess(type: AccessType, desc: String, gate: String) {
         scope.launch(Dispatchers.IO) {
-
             if (userRole == "ADMIN") {
-                // --- ADMIN: Log Server ---
+                // --- ADMIN: Ghi log Server trực tiếp ---
                 val typeStr = when(type) {
                     AccessType.CHECK_IN -> "CHECK_IN"
                     AccessType.CHECK_OUT -> "CHECK_OUT"
@@ -87,50 +86,54 @@ fun AccessControlScreen(
                 }
                 val adminId = "ADMIN01"
 
-                val doAccess = suspend {
-                    // Gọi hàm ghi log Admin lên Server
-                    val status = repo.adminAccessLog(adminId, typeStr, gate)
+                val status = repo.adminAccessLog(adminId, typeStr, gate)
+
+                withContext(Dispatchers.Main) {
+                    when (status) {
+                        HttpStatusCode.OK -> { message = "✅ Admin: Đã ghi log lên Server ($desc)" }
+                        HttpStatusCode.Conflict -> {
+                            message = "❌ Lỗi: Xung đột trạng thái phiên làm việc trên Server."
+                        }
+                        else -> { message = "❌ Lỗi Server: (${status.value})" }
+                    }
+                    logRefreshKey++
+                }
+            } else {
+                // --- USER MODE: Kiểm tra thẻ vật lý trước ---
+                try {
+                    // 🔥 KIỂM TRA KHÓA VẬT LÝ NGAY LÚC NHẤN NÚT
+                    if (repo.isCardLocked()) {
+                        withContext(Dispatchers.Main) {
+                            // Hiển thị thông báo lỗi đỏ tương tự như nhập sai PIN 3 lần
+                            message = "❌ THẺ ĐÃ BỊ VÔ HIỆU HÓA! Vui lòng liên hệ Admin để mở lại."
+                        }
+                        return@launch // Kết thúc sớm, không gửi log lên server
+                    }
+
+                    // Nếu thẻ OK, thực hiện ghi log (Server + Thẻ)
+                    val success = try {
+                        repo.addAccessLog(type, desc)
+                    } catch (e: Exception) {
+                        false
+                    }
 
                     withContext(Dispatchers.Main) {
-                        when (status) {
-                            HttpStatusCode.OK -> { message = "✅ Admin: Đã ghi log lên Server ($desc)" }
-                            HttpStatusCode.Conflict -> {
-                                val rejectionReason = when (type) {
-                                    AccessType.CHECK_IN -> "❌ Lỗi: Admin đang có phiên làm việc mở. Vui lòng Check-Out trước."
-                                    AccessType.CHECK_OUT -> "❌ Lỗi: Không tìm thấy phiên làm việc mở để Check-Out."
-                                    else -> "❌ Lỗi: Yêu cầu đã bị từ chối."
-                                }
-                                message = rejectionReason
+                        if (success) {
+                            message = "✅ Ghi log thành công: $desc"
+                        } else {
+                            val rejectionReason = when (type) {
+                                AccessType.CHECK_IN -> "❌ Lỗi: Bạn đang có phiên làm việc mở."
+                                AccessType.CHECK_OUT -> "❌ Lỗi: Không tìm thấy phiên để Check-Out."
+                                else -> "❌ Lỗi truy cập hoặc thẻ đã bị ngắt kết nối!"
                             }
-                            else -> { message = "❌ Lỗi Server: (${status.value}). Kiểm tra Console Server!" }
+                            message = rejectionReason
                         }
                         logRefreshKey++
                     }
-                }
-
-                // Admin không cần PIN cho Check-in/out. Đã xác thực cho Restricted Area (nếu cần).
-                doAccess()
-
-            } else {
-                // --- USER: Log Server -> Thẻ ---
-                val success = try {
-                    repo.addAccessLog(type, desc)
                 } catch (e: Exception) {
-                    println("Critical error during access: ${e.message}")
-                    false
-                }
-
-                withContext(Dispatchers.Main) {
-                    if (success) { message = "✅ Ghi log thành công: $desc" }
-                    else {
-                        val rejectionReason = when (type) {
-                            AccessType.CHECK_IN -> "❌ Lỗi: Bạn đang có phiên làm việc mở. Vui lòng Check-Out trước."
-                            AccessType.CHECK_OUT -> "❌ Lỗi: Không tìm thấy phiên làm việc mở để Check-Out."
-                            else -> "❌ Lỗi truy cập khu vực đặc biệt hoặc lỗi kết nối!"
-                        }
-                        message = rejectionReason
+                    withContext(Dispatchers.Main) {
+                        message = "❌ Lỗi: Thẻ không phản hồi hoặc đã bị rút ra."
                     }
-                    logRefreshKey++
                 }
             }
         }

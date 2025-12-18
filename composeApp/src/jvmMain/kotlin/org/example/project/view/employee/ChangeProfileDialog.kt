@@ -10,14 +10,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.time.Instant
+import java.time.LocalDate
+import java.time.Period
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.example.project.data.CardRepositoryProvider // Import này là cần thiết
+import org.example.project.data.CardRepositoryProvider
 
 @Composable
 fun SimpleInfoField(
@@ -52,7 +55,7 @@ fun ChangeProfileDialog(
     isAuthenticated: Boolean = false,
     onClose: () -> Unit
 ) {
-    val repo = CardRepositoryProvider.current // Lấy repository
+    val repo = CardRepositoryProvider.current
 
     LaunchedEffect(isAuthenticated) {
         if (isAuthenticated) vm.loadAvatarFromCard()
@@ -65,16 +68,17 @@ fun ChangeProfileDialog(
     var dob by remember { mutableStateOf(emp.dob) }
     var dept by remember { mutableStateOf(emp.department) }
     var pos by remember { mutableStateOf(emp.position) }
-    val id = emp.id // ID bị khóa
+    val id = emp.id // Luôn lấy ID từ object gốc, không đổi
 
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState()
 
-    // 🔥 TẢI DỮ LIỆU ĐỘNG TỪ SERVER
-    var departmentsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // Map: ID -> Name
-    var positionsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // Map: ID -> Name
+    // Báo lỗi tuổi
+    var ageErrorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Kích hoạt tải dữ liệu khi khởi tạo
+    var departmentsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var positionsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
     LaunchedEffect(Unit) {
         launch(Dispatchers.IO) {
             departmentsMap = repo.getDepartmentsMap()
@@ -82,12 +86,11 @@ fun ChangeProfileDialog(
         }
     }
 
-    // Lấy danh sách tên cho Dropdown
     val departmentNames = departmentsMap.values.toList()
     val positionNames = positionsMap.values.toList()
 
     var expandedDept by remember { mutableStateOf(false) }
-    var expandedPos by remember { mutableStateOf(false) } // 🔥 Thêm state cho Dropdown chức vụ
+    var expandedPos by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -97,11 +100,25 @@ fun ChangeProfileDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Chỉnh sửa hồ sơ", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 TextButton(onClick = {
+                    // 🔥 KIỂM TRA TUỔI >= 15
+                    try {
+                        val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+                        val birthDate = LocalDate.parse(dob, formatter)
+                        val age = Period.between(birthDate, LocalDate.now()).years
+
+                        if (age < 15) {
+                            ageErrorMessage = "❌ Nhân viên phải từ đủ 15 tuổi trở lên!"
+                            return@TextButton
+                        }
+                    } catch (e: Exception) {
+                        ageErrorMessage = "❌ Định dạng ngày sinh không hợp lệ!"
+                        return@TextButton
+                    }
+
+                    // Nếu qua được check tuổi thì tiến hành lưu
                     if (isAdmin) {
-                        // Use admin update endpoint for ADMIN
                         vm.updateAdminProfile(id, name, dob, dept, pos)
                     } else {
-                        // Keep existing behavior for normal users (write to card + server)
                         vm.updateEmployee(id, name, dob, dept, pos)
                     }
                     onClose()
@@ -115,13 +132,22 @@ fun ChangeProfileDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Avatar (Giữ nguyên logic cũ) -> pass isAdmin so EditableAvatar hides pick for admin
                 EditableAvatar(
                     currentBitmap = vm.avatarBitmap,
                     fallbackName = name,
                     onPickImage = { pickFile()?.let { vm.uploadAvatar(it) } },
-                    isAdmin = emp.role.equals("ADMIN", ignoreCase = true) // <-- new argument
+                    isAdmin = isAdmin
                 )
+
+                // Hiển thị lỗi tuổi nếu có
+                if (ageErrorMessage != null) {
+                    Text(
+                        text = ageErrorMessage!!,
+                        color = Color.Red,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -130,13 +156,21 @@ fun ChangeProfileDialog(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 
-                        // 1. ID (Khóa)
-                        SimpleInfoField("Mã Nhân Viên (Không thể đổi)", id, {}, readOnly = true)
+                        // 1. ID (KHÓA HOÀN TOÀN)
+                        SimpleInfoField(
+                            label = "Mã Nhân Viên (Hệ thống tự động)",
+                            value = id,
+                            onValueChange = {},
+                            readOnly = true
+                        )
 
                         // 2. Họ Tên
-                        SimpleInfoField("Họ và Tên", name, { name = it })
+                        SimpleInfoField("Họ và Tên", name, {
+                            name = it
+                            ageErrorMessage = null // Reset lỗi khi gõ lại
+                        })
 
-                        // 3. Phòng Ban (Dropdown - Dữ liệu động)
+                        // 3. Phòng Ban (Dropdown)
                         ExposedDropdownMenuBox(
                             expanded = expandedDept,
                             onExpandedChange = { expandedDept = !expandedDept }
@@ -163,7 +197,7 @@ fun ChangeProfileDialog(
                             }
                         }
 
-                        // 🔥 4. Chức Vụ (Dropdown - Dữ liệu động)
+                        // 4. Chức Vụ (Dropdown)
                         ExposedDropdownMenuBox(
                             expanded = expandedPos,
                             onExpandedChange = { expandedPos = !expandedPos }
@@ -194,7 +228,7 @@ fun ChangeProfileDialog(
                         SimpleInfoField(
                             label = "Ngày Sinh",
                             value = dob,
-                            onValueChange = { dob = it },
+                            onValueChange = { dob = it; ageErrorMessage = null },
                             trailingIcon = {
                                 IconButton(onClick = { showDatePicker = true }) {
                                     Icon(Icons.Default.CalendarMonth, contentDescription = "Chọn ngày")
@@ -214,7 +248,11 @@ fun ChangeProfileDialog(
             confirmButton = {
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
-                        dob = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                        dob = Instant.ofEpochMilli(millis)
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDate()
+                            .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                        ageErrorMessage = null
                     }
                     showDatePicker = false
                 }) { Text("OK") }

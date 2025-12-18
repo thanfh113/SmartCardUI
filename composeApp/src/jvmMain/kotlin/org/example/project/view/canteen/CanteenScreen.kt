@@ -98,14 +98,27 @@ fun CanteenScreen(
         }
     }
 
+    // 🔥 HÀM THỰC HIỆN THANH TOÁN (ĐÃ SỬA LOGIC HÓA ĐƠN)
     val performPayment = { amount: Double ->
         scope.launch(Dispatchers.IO) {
             isProcessing = true
             val success = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", -amount, "Canteen") else repo.pay(amount, "Canteen")
+
             withContext(Dispatchers.Main) {
                 isProcessing = false
                 if (success) {
-                    lastTransactionItems = dynamicProducts.filter { (selectedQuantities[it.name] ?: 0) > 0 }.map { it to (selectedQuantities[it.name] ?: 0) }
+                    // Lọc danh sách món ăn thực tế đã chọn
+                    val selectedItems = dynamicProducts
+                        .filter { (selectedQuantities[it.name] ?: 0) > 0 }
+                        .map { it to (selectedQuantities[it.name] ?: 0) }
+
+                    // 🔥 NẾU KHÔNG CHỌN MÓN (CHỈ NHẬP TIỀN THỦ CÔNG) -> TẠO ITEM GIẢ ĐỂ HIỆN HÓA ĐƠN
+                    lastTransactionItems = if (selectedItems.isEmpty()) {
+                        listOf(ProductItem("Thanh toán dịch vụ", "Dịch vụ", amount.toInt(), Icons.Default.Payments) to 1)
+                    } else {
+                        selectedItems
+                    }
+
                     showReceipt = true
                     balanceVersion++
                     onBalanceChanged()
@@ -156,14 +169,27 @@ fun CanteenScreen(
                             val amt = amountText.toDoubleOrNull() ?: 0.0
                             if (amt > 0) {
                                 scope.launch(Dispatchers.IO) {
+                                    // 🔥 KIỂM TRA KHÓA TRƯỚC KHI NẠP
+                                    if (userRole != "ADMIN" && repo.isCardLocked()) {
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thực hiện nạp tiền." to false
+                                        }
+                                        return@launch
+                                    }
+
                                     isProcessing = true
                                     val ok = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", amt, "Nạp tiền") else repo.topUp(amt)
+
                                     withContext(Dispatchers.Main) {
                                         isProcessing = false
                                         if (ok) {
                                             statusMessage = "Đã nạp ${formatMoney(amt)} thành công!" to true
-                                            balanceVersion++; onBalanceChanged(); amountText = ""
-                                        } else statusMessage = "Nạp tiền thất bại!" to false
+                                            balanceVersion++
+                                            onBalanceChanged()
+                                            amountText = ""
+                                        } else {
+                                            statusMessage = "❌ Nạp tiền thất bại!" to false
+                                        }
                                     }
                                 }
                             }
@@ -171,29 +197,39 @@ fun CanteenScreen(
                         modifier = Modifier.weight(1f).height(50.dp),
                         enabled = !isProcessing && amountText.isNotEmpty()
                     ) {
-                        Icon(Icons.Default.AddCard, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Nạp Tiền")
+                        Text("Nạp tiền")
                     }
 
                     Button(
                         onClick = {
                             val amt = amountText.toDoubleOrNull() ?: 0.0
                             if (amt > 0) {
-                                if (userRole == "ADMIN") {
-                                    showAdminPinDialog = true
-                                    adminPin = ""
-                                    adminPinError = null
-                                } else onRequirePin { performPayment(amt) }
+                                scope.launch(Dispatchers.IO) {
+                                    // 🔥 KIỂM TRA KHÓA TRƯỚC KHI THANH TOÁN
+                                    if (userRole != "ADMIN" && repo.isCardLocked()) {
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thanh toán." to false
+                                        }
+                                        return@launch
+                                    }
+
+                                    withContext(Dispatchers.Main) {
+                                        if (userRole == "ADMIN") {
+                                            showAdminPinDialog = true
+                                            adminPin = ""
+                                            adminPinError = null
+                                        } else {
+                                            onRequirePin { performPayment(amt) }
+                                        }
+                                    }
+                                }
                             }
                         },
                         modifier = Modifier.weight(1f).height(50.dp),
                         enabled = !isProcessing && amountText.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                     ) {
-                        Icon(Icons.Default.ShoppingCartCheckout, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Thanh Toán")
+                        Text("Thanh toán", color = Color.White)
                     }
                 }
             }
@@ -224,13 +260,14 @@ fun CanteenScreen(
             title = { Text("Hóa đơn thanh toán", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Divider()
+                    HorizontalDivider()
                     lastTransactionItems.forEach { (item, qty) ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(item.name, modifier = Modifier.weight(1f)); Text("x$qty  ${formatMoney((item.price * qty).toDouble())}")
+                            Text(item.name, modifier = Modifier.weight(1f))
+                            Text("x$qty  ${formatMoney((item.price * qty).toDouble())}")
                         }
                     }
-                    Divider()
+                    HorizontalDivider()
                     Text("Tổng cộng: ${formatMoney(lastTransactionItems.sumOf { it.first.price * it.second }.toDouble())}",
                         fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End, color = Color(0xFF2E7D32))
                 }
@@ -243,7 +280,7 @@ fun CanteenScreen(
         )
     }
 
-    // --- DIALOG PIN ADMIN ĐÃ CẬP NHẬT ---
+    // --- DIALOG PIN ADMIN ---
     if (showAdminPinDialog) {
         AdminPinInputDialog(
             pin = adminPin,
@@ -270,7 +307,6 @@ fun CanteenScreen(
     }
 }
 
-// --- CẬP NHẬT: COMPOSABLE PIN ADMIN PHONG CÁCH USER ---
 @Composable
 fun AdminPinInputDialog(
     pin: String,
@@ -285,54 +321,34 @@ fun AdminPinInputDialog(
     AlertDialog(
         onDismissRequest = { if (!isChecking) onDismiss() },
         icon = { Icon(Icons.Default.Lock, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Xác thực mã PIN Admin", fontWeight = FontWeight.Bold) },
+        title = { Text("Xác thực PIN Admin", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Vui lòng nhập mã PIN quản trị viên để hoàn tất thanh toán.", style = MaterialTheme.typography.bodyMedium)
-
+                Text("Nhập PIN quản trị viên để hoàn tất thanh toán.")
                 OutlinedTextField(
                     value = pin,
                     onValueChange = { if (it.all { c -> c.isDigit() }) onPinChange(it) },
-                    label = { Text("Mã PIN Admin") },
+                    label = { Text("PIN Admin") },
                     modifier = Modifier.fillMaxWidth(),
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    singleLine = true,
-                    enabled = !isChecking,
                     trailingIcon = {
                         val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
-                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                            Icon(icon, contentDescription = "Toggle password visibility")
-                        }
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) { Icon(icon, null) }
                     },
                     shape = RoundedCornerShape(12.dp)
                 )
-
-                if (error != null) {
-                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                }
+                if (error != null) Text(error, color = Color.Red, fontWeight = FontWeight.Bold)
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onPinConfirmed(pin) },
-                enabled = !isChecking && pin.length >= 4,
-                modifier = Modifier.widthIn(min = 100.dp)
-            ) {
-                if (isChecking) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
-                else Text("Xác nhận")
+            Button(onClick = { onPinConfirmed(pin) }, enabled = !isChecking && pin.length >= 4) {
+                if (isChecking) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("Xác nhận")
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isChecking) {
-                Text("Hủy bỏ")
-            }
-        },
-        shape = RoundedCornerShape(24.dp)
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isChecking) { Text("Hủy") } }
     )
 }
-
-// --- GIỮ NGUYÊN CÁC COMPOSABLE KHÁC ---
 
 @Composable
 fun ProductSection(products: List<ProductItem>, quantities: MutableMap<String, Int>, onTotalAmountChange: (Int) -> Unit) {
