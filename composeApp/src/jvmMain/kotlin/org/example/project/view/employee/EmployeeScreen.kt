@@ -1,5 +1,6 @@
 package org.example.project.view.employee
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,12 +29,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.example.project.data.CardRepository
 import org.example.project.data.CardRepositoryProvider
+import org.example.project.model.Employee
 import org.example.project.utils.ImageUtils
 import java.awt.FileDialog
 import java.awt.Frame
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.example.project.data.PinIdenticalException
 
 // --- VIEW MODEL ---
 class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvider.current) {
@@ -43,6 +46,28 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
     var avatarBitmap: ImageBitmap? by mutableStateOf<ImageBitmap?>(null)
         private set
 
+    suspend fun loadFromServer() {
+        try {
+            val adminData = repo.getEmployeeFromServer("ADMIN")
+            if (adminData != null) {
+                employee = adminData
+            } else {
+                employee = Employee(
+                    id = "ADMIN01",
+                    name = "Administrator",
+                    dob = "01/01/1990",
+                    department = "System Admin",
+                    position = "Super User",
+                    role = "ADMIN",
+                    photoPath = null,
+                    isDefaultPin = false
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun loadAvatarFromCard() {
         try {
             val bytes = repo.getAvatar()
@@ -50,9 +75,13 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
         } catch (e: Exception) { }
     }
 
-    fun updateEmployee(name: String, dob: String, dept: String, position: String) {
-        employee = employee.copy(name = name, dob = dob, department = dept, position = position)
+    fun updateEmployee(id: String, name: String, dob: String, dept: String, position: String) {
+        employee = employee.copy(id = id, name = name, dob = dob, department = dept, position = position)
         repo.updateEmployee(employee)
+    }
+
+    suspend fun generateNextId(department: String): String {
+        return repo.getNextId(department)
     }
 
     fun uploadAvatar(filePath: String) {
@@ -63,23 +92,36 @@ class EmployeeViewModel(private val repo: CardRepository = CardRepositoryProvide
             }
         }
     }
+
+    fun updateAdminProfile(id: String, name: String, dob: String, dept: String, position: String) {
+        employee = employee.copy(id = id, name = name, dob = dob, department = dept, position = position)
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            try {
+                repo.updateAdminProfile(id, name, dob, dept, position)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
 }
 
 @Composable
 fun EmployeeScreen(
     vm: EmployeeViewModel = remember { EmployeeViewModel() },
-    onChangePin: ((() -> Unit) -> Unit)? = null, // vẫn giữ để không phá API cũ
+    onChangePin: ((() -> Unit) -> Unit)? = null,
     isAuthenticated: Boolean = false,
     forceEditProfile: Boolean = false,
     onForceEditConsumed: () -> Unit = {}
 ) {
     LaunchedEffect(isAuthenticated) { if (isAuthenticated) vm.loadAvatarFromCard() }
 
-    val emp = vm.employee // luôn cập nhật từ viewmodel
+    val scope = rememberCoroutineScope()
+    val emp = vm.employee
+    val isAdmin = emp.role.equals("ADMIN", ignoreCase = true)
 
+    // State điều khiển giao diện
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeProfileDialog by remember { mutableStateOf(false) }
-    var saveMessage by remember { mutableStateOf<String?>(null) }
+    var showDetails by remember { mutableStateOf(false) } // Mới: dùng để ẩn/hiện thông tin
+    var showChangePinSuccess by remember { mutableStateOf(false) }
 
     LaunchedEffect(forceEditProfile) {
         if (forceEditProfile) {
@@ -88,12 +130,15 @@ fun EmployeeScreen(
         }
     }
 
-    if (showChangePinDialog) {
-        ChangePinDialog(
-            onClose = { showChangePinDialog = false },
+    if (showChangePinDialog && onChangePin != null) {
+        ChangePinDialogWithVerify(
+            onDismiss = { showChangePinDialog = false },
             onSuccess = {
-                saveMessage = "Đổi PIN thành công!"
-            }
+                showChangePinDialog = false
+                showChangePinSuccess = true
+            },
+            isAdmin = isAdmin,
+            adminId = if (isAdmin) emp.id else null
         )
     }
 
@@ -105,91 +150,85 @@ fun EmployeeScreen(
         )
     }
 
-    // --- GIAO DIỆN MỚI ---
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        // Header "Employee Profile"
-        Text(
-            text = "Employee Profile",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        // ----- Visual ID Card đưa lên ngay sau header -----
-        VisualEmployeeIdCard(
-            avatarBitmap = vm.avatarBitmap,
-            name = emp.name,
-            id = emp.id,
-            dob = emp.dob,
-            dept = emp.department,
-            pos = emp.position
-        )
-
-        // ----- Hai nút ở dưới card -----
-        Button(
-            onClick = {
-                showChangeProfileDialog = true
-            },
-            modifier = Modifier
-                .fillMaxWidth(0.4f)
-                .height(48.dp),
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Text("Change Profile")
+    if (showChangePinSuccess) {
+        LaunchedEffect(Unit) {
+            delay(3000)
+            showChangePinSuccess = false
         }
+    }
 
-        OutlinedButton(
-            onClick = { showChangePinDialog = true },
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.4f)
-                .height(48.dp),
-            shape = MaterialTheme.shapes.medium
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 24.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("Change PIN")
-        }
+            Text(
+                text = "Hồ sơ nhân viên",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
 
-        // Thông báo lưu / đổi PIN thành công (giữ nguyên)
-        if (saveMessage != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        color = Color(0xFFE0F7EC),
-                        shape = MaterialTheme.shapes.medium
-                    )
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            // Thẻ ID có khả năng co giãn thông tin
+            VisualEmployeeIdCard(
+                avatarBitmap = vm.avatarBitmap,
+                name = emp.name,
+                id = emp.id,
+                dob = emp.dob,
+                dept = emp.department,
+                pos = emp.position,
+                isAdmin = isAdmin,
+                isExpanded = showDetails
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Nút Xem chi tiết hồ sơ (Màu xanh lá theo mẫu)
+            Button(
+                onClick = { showDetails = !showDetails },
+                modifier = Modifier.fillMaxWidth(0.6f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                shape = MaterialTheme.shapes.medium
             ) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = Color(0xFF1BAA61)
-                )
-                Text(
-                    text = saveMessage!!,
-                    color = Color(0xFF1BAA61),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Icon(if (showDetails) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (showDetails) "Ẩn chi tiết" else "Xem hồ sơ")
+            }
+
+            // Nút Chỉnh sửa (Việt hóa)
+            OutlinedButton(
+                onClick = { showChangeProfileDialog = true },
+                modifier = Modifier.fillMaxWidth(0.6f).height(48.dp),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text("Chỉnh sửa hồ sơ")
+            }
+
+            // Nút Đổi PIN (Việt hóa)
+            OutlinedButton(
+                onClick = { showChangePinDialog = true },
+                modifier = Modifier.fillMaxWidth(0.6f).height(48.dp),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text("Đổi mã PIN")
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        if (showChangePinSuccess) {
+            Snackbar(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                action = { TextButton(onClick = { showChangePinSuccess = false }) { Text("OK") } }
+            ) {
+                Text("✅ Đổi mã PIN thành công!")
+            }
+        }
     }
 }
 
-/**
- * Card phía dưới “Visual Employee ID Card”
- * – Bên trái là ảnh (hoặc placeholder)
- * – Bên phải là các trường: Full Name, ID Number, Date of Birth, Department, Position
- */
 @Composable
 fun VisualEmployeeIdCard(
     avatarBitmap: ImageBitmap?,
@@ -197,20 +236,21 @@ fun VisualEmployeeIdCard(
     id: String,
     dob: String,
     dept: String,
-    pos: String
+    pos: String,
+    isAdmin: Boolean = false,
+    isExpanded: Boolean = false
 ) {
     Card(
         modifier = Modifier
-            .fillMaxWidth(0.7f)
+            .fillMaxWidth(0.85f)
             .border(
-                width = 2.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
                 shape = MaterialTheme.shapes.large
             )
-            .heightIn(min = 260.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
+            .animateContentSize(), // Hiệu ứng mượt khi mở rộng/thu nhỏ
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = MaterialTheme.shapes.large
     ){
         Column(
@@ -222,115 +262,63 @@ fun VisualEmployeeIdCard(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Ảnh chữ nhật bên trái
                 Box(
                     modifier = Modifier
-                        .width(150.dp)
-                        .height(170.dp)
+                        .size(width = 100.dp, height = 120.dp)
                         .clip(MaterialTheme.shapes.medium)
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (avatarBitmap != null) {
+                    if (!isAdmin && avatarBitmap != null) {
                         Image(
                             bitmap = avatarBitmap,
-                            contentDescription = "Employee photo",
+                            contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
                         Text(
-                            text = name
-                                .split(" ")
-                                .filter { it.isNotBlank() }
-                                .takeLast(2)
-                                .joinToString("") { it.first().uppercase() }
-                                .ifBlank { "NV" },
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            text = name.split(" ").filter { it.isNotBlank() }.takeLast(2).joinToString("") { it.first().uppercase() }.ifBlank { "NV" },
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                         )
                     }
                 }
 
-                // Các trường ở bên phải (Name, ID, DOB) – CHỈ HIỂN THỊ
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StaticInfoLine(
-                        label = "Full Name",
-                        value = name
-                    )
-                    StaticInfoLine(
-                        label = "ID Number",
-                        value = id
-                    )
-                    StaticInfoLine(
-                        label = "Date of Birth",
-                        value = dob
-                    )
+                    StaticInfoLine(label = "Họ và Tên", value = name)
+                    StaticInfoLine(label = "Ngày sinh", value = dob)
+
+                    if (isExpanded) {
+                        StaticInfoLine(label = "Mã nhân viên", value = id)
+                    }
                 }
             }
 
-            Divider()
-
-            // Department & Position hàng dưới – CHỈ HIỂN THỊ
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(24.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    StaticInfoLine(
-                        label = "Department",
-                        value = dept
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    StaticInfoLine(
-                        label = "Position",
-                        value = pos
-                    )
+            if (isExpanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        StaticInfoLine(label = "Phòng ban", value = dept)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        StaticInfoLine(label = "Chức vụ", value = pos)
+                    }
                 }
             }
         }
     }
 }
 
-
 @Composable
-private fun EditableInfoLine(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = MaterialTheme.typography.bodyLarge,
-            shape = MaterialTheme.shapes.small,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-            )
-        )
-    }
-}
-
-@Composable
-private fun StaticInfoLine(
-    label: String,
-    value: String
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun StaticInfoLine(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -344,27 +332,28 @@ private fun StaticInfoLine(
     }
 }
 
+// --- GIỮ NGUYÊN CÁC DIALOG NHƯ CŨ NHƯNG VIỆT HÓA NỘI DUNG ---
 
-// --- LOGIC DIALOG ĐỔI PIN (CÓ HIỆN MẬT KHẨU) ---
 @Composable
-fun ChangePinDialog(
-    onClose: () -> Unit,
-    onSuccess: () -> Unit
+fun ChangePinDialogWithVerify(
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit,
+    isAdmin: Boolean = false,
+    adminId: String? = null
 ) {
     var oldPin by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf<String?>(null) }
-
-    var isLoading by remember { mutableStateOf(false) } // ✅ Loading state
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
     val repo = CardRepositoryProvider.current
-    val scope = rememberCoroutineScope() // ✅ Coroutine Scope
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
-        onDismissRequest = { if (!isLoading) onClose() },
+        onDismissRequest = { if (!isLoading) onDismiss() },
         icon = { Icon(Icons.Default.LockReset, null, modifier = Modifier.size(32.dp)) },
-        title = { Text("Đổi Mã PIN", textAlign = TextAlign.Center) },
+        title = { Text("Đổi Mã PIN", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -375,13 +364,13 @@ fun ChangePinDialog(
                         CircularProgressIndicator()
                     }
                 } else {
-                    PinInputField(value = oldPin, onValueChange = { oldPin = it }, label = "PIN hiện tại")
-                    PinInputField(value = newPin, onValueChange = { newPin = it }, label = "PIN mới")
-                    PinInputField(value = confirmPin, onValueChange = { confirmPin = it }, label = "Nhập lại PIN mới")
+                    PinInputField(value = oldPin, onValueChange = { oldPin = it; errorMessage = null }, label = "Mã PIN hiện tại")
+                    PinInputField(value = newPin, onValueChange = { newPin = it; errorMessage = null }, label = "Mã PIN mới")
+                    PinInputField(value = confirmPin, onValueChange = { confirmPin = it; errorMessage = null }, label = "Xác nhận PIN mới")
                 }
 
-                if (message != null) {
-                    Text(message!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                if (errorMessage != null) {
+                    Text(errorMessage!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
             }
         },
@@ -390,153 +379,101 @@ fun ChangePinDialog(
                 enabled = !isLoading,
                 onClick = {
                     if (newPin.length < 4) {
-                        message = "PIN phải có ít nhất 4 ký tự."
+                        errorMessage = "PIN phải có ít nhất 4 ký tự."
                     } else if (newPin != confirmPin) {
-                        message = "PIN mới không khớp."
+                        errorMessage = "Xác nhận PIN không khớp."
                     } else {
                         isLoading = true
-                        message = null
-
-                        // ✅ LOGIC XỬ LÝ BACKGROUND
                         scope.launch(Dispatchers.IO) {
-                            // B1: Verify PIN cũ trước
-                            val isOldPinOk = repo.verifyPin(oldPin)
-
-                            if (isOldPinOk) {
-                                // B2: Nếu đúng -> Tiến hành đổi sang PIN mới
-                                val changeOk = repo.changePin(oldPin, newPin)
-
-                                withContext(Dispatchers.Main) {
-                                    isLoading = false
-                                    if (changeOk) {
-                                        // Verify lại lần nữa để đảm bảo session master key mới nhất (optional nhưng nên làm)
-                                        repo.verifyPin(newPin)
-                                        onSuccess()
-                                        onClose()
-                                    } else {
-                                        message = "Lỗi khi ghi dữ liệu xuống thẻ!"
+                            try {
+                                val isOldPinOk = if (isAdmin) repo.verifyAdminPin(oldPin) else repo.verifyPin(oldPin)
+                                if (isOldPinOk) {
+                                    val changeOk = if (isAdmin) adminId?.let { repo.changeAdminPin(it, newPin) } ?: false else repo.changePin(oldPin, newPin)
+                                    withContext(Dispatchers.Main) {
+                                        isLoading = false
+                                        if (changeOk) onSuccess() else errorMessage = "Lỗi khi cập nhật PIN."
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        isLoading = false
+                                        errorMessage = "Mã PIN hiện tại không chính xác."
                                     }
                                 }
-                            } else {
+                            } catch (e: PinIdenticalException) {
                                 withContext(Dispatchers.Main) {
                                     isLoading = false
-                                    message = "PIN hiện tại không đúng!"
+                                    errorMessage = "Mã PIN mới không được trùng mã cũ."
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    isLoading = false
+                                    errorMessage = "Lỗi hệ thống: ${e.message}"
                                 }
                             }
                         }
                     }
                 }
-            ) {
-                Text("Xác nhận")
-            }
+            ) { Text("Cập nhật") }
         },
         dismissButton = {
-            TextButton(onClick = onClose, enabled = !isLoading) { Text("Hủy") }
+            TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Hủy bỏ") }
         }
     )
 }
 
-// Helper: Ô nhập PIN có nút mắt thần
 @Composable
-fun PinInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String
-) {
+fun PinInputField(value: String, onValueChange: (String) -> Unit, label: String) {
     var passwordVisible by remember { mutableStateOf(false) }
-
-    Column(
+    OutlinedTextField(
+        value = value,
+        onValueChange = { if (it.all { c -> c.isDigit() }) onValueChange(it) },
+        label = { Text(label) },
+        singleLine = true,
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        OutlinedTextField(
-            value = value,
-            onValueChange = { if (it.all { c -> c.isDigit() }) onValueChange(it) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = MaterialTheme.typography.bodyLarge,
-            shape = RoundedCornerShape(12.dp),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
-                val desc = if (passwordVisible) "Hide password" else "Show password"
-
-                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                    Icon(icon, contentDescription = desc)
-                }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.outline,
-                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
-                disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        )
-    }
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                Icon(if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, null)
+            }
+        },
+        shape = RoundedCornerShape(12.dp)
+    )
 }
 
-
 @Composable
-fun EditableAvatar(
-    currentBitmap: ImageBitmap?,
-    fallbackName: String,
-    onPickImage: () -> Unit
-) {
-    val size = 140.dp
-    Box(modifier = Modifier.size(size)) {
-        if (currentBitmap != null) {
+fun EditableAvatar(currentBitmap: ImageBitmap?, fallbackName: String, onPickImage: () -> Unit, isAdmin: Boolean = false) {
+    Box(modifier = Modifier.size(120.dp)) {
+        if (!isAdmin && currentBitmap != null) {
             Image(
                 bitmap = currentBitmap,
-                contentDescription = "Avatar",
+                contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(CircleShape)
-                    .border(3.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                modifier = Modifier.fillMaxSize().clip(CircleShape).border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
             )
         } else {
-            val initials = fallbackName.split(" ").filter { it.isNotBlank() }
-                .takeLast(2).joinToString("") { it.first().uppercase() }.ifBlank { "NV" }
-
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .border(3.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                modifier = Modifier.fillMaxSize().clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = initials,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 40.sp
+                    text = fallbackName.split(" ").filter { it.isNotBlank() }.takeLast(2).joinToString("") { it.first().uppercase() }.ifBlank { "NV" },
+                    fontSize = 32.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary
                 )
             }
         }
-
-        SmallFloatingActionButton(
-            onClick = onPickImage,
-            containerColor = MaterialTheme.colorScheme.secondary,
-            contentColor = Color.White,
-            modifier = Modifier.align(Alignment.BottomEnd).offset((-4).dp, (-4).dp)
-        ) {
-            Icon(Icons.Default.Edit, null, Modifier.size(20.dp))
+        if (!isAdmin) {
+            SmallFloatingActionButton(
+                onClick = onPickImage,
+                modifier = Modifier.align(Alignment.BottomEnd),
+                containerColor = MaterialTheme.colorScheme.primary
+            ) { Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(16.dp)) }
         }
     }
 }
 
 fun pickFile(): String? {
-    val dialog = FileDialog(null as Frame?, "Chọn ảnh đại diện", FileDialog.LOAD)
+    val dialog = FileDialog(null as Frame?, "Chọn ảnh hồ sơ", FileDialog.LOAD)
     dialog.file = "*.jpg;*.jpeg;*.png"
     dialog.isVisible = true
     return if (dialog.directory != null && dialog.file != null) dialog.directory + dialog.file else null

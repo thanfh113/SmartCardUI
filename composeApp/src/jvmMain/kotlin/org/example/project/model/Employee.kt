@@ -6,5 +6,7 @@ data class Employee(
     val dob: String,
     val department: String,
     val position: String,
-    val photoPath: String? = null
+    val role: String,
+    val photoPath: String? = null,
+    val isDefaultPin: Boolean
 )
