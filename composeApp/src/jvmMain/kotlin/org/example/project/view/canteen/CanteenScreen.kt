@@ -34,6 +34,7 @@ import org.example.project.data.CardRepositoryProvider
 import org.example.project.model.Product
 import java.text.NumberFormat
 import java.util.Locale
+import androidx.compose.ui.draw.alpha
 
 // --- DTO & Mapper ---
 data class ProductItem(
@@ -63,6 +64,8 @@ fun CanteenScreen(
     val scope = rememberCoroutineScope()
 
     var amountText by remember { mutableStateOf("") }
+    var isAmountEnabled by remember { mutableStateOf(false) }
+
     val selectedQuantities = remember { mutableStateMapOf<String, Int>() }
     val quickAmounts = listOf(10_000, 20_000, 50_000, 100_000, 200_000, 500_000)
 
@@ -146,9 +149,19 @@ fun CanteenScreen(
                     label = { Text("Số tiền giao dịch") },
                     prefix = { Text("₫ ") },
                     modifier = Modifier.fillMaxWidth(),
-                    textStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    // Logic mới:
+                    readOnly = !isAmountEnabled,
+                    textStyle = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = if (isAmountEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    trailingIcon = { if(amountText.isNotEmpty()) IconButton(onClick = { amountText = "" }) { Icon(Icons.Default.Clear, null) } }
+                    trailingIcon = {
+                        // Chỉ hiện nút xóa khi đang ở chế độ nạp tiền
+                        if(amountText.isNotEmpty() && isAmountEnabled) {
+                            IconButton(onClick = { amountText = "" }) { Icon(Icons.Default.Clear, null) }
+                        }
+                    }
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -166,6 +179,13 @@ fun CanteenScreen(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
                         onClick = {
+                            if (!isAmountEnabled) {
+                                // Hiệu ứng: Nếu đang khóa thì bấm lần 1 để mở khóa field nhập tiền
+                                isAmountEnabled = true
+                                amountText = ""
+                                selectedQuantities.clear()
+                                return@Button
+                            }
                             val amt = amountText.toDoubleOrNull() ?: 0.0
                             if (amt > 0) {
                                 scope.launch(Dispatchers.IO) {
@@ -187,6 +207,7 @@ fun CanteenScreen(
                                             balanceVersion++
                                             onBalanceChanged()
                                             amountText = ""
+                                            isAmountEnabled = false
                                         } else {
                                             statusMessage = "❌ Nạp tiền thất bại!" to false
                                         }
@@ -202,8 +223,10 @@ fun CanteenScreen(
 
                     Button(
                         onClick = {
+                            isAmountEnabled = false
                             val amt = amountText.toDoubleOrNull() ?: 0.0
                             if (amt > 0) {
+                                isAmountEnabled = false
                                 scope.launch(Dispatchers.IO) {
                                     // 🔥 KIỂM TRA KHÓA TRƯỚC KHI THANH TOÁN
                                     if (userRole != "ADMIN" && repo.isCardLocked()) {
@@ -226,7 +249,7 @@ fun CanteenScreen(
                             }
                         },
                         modifier = Modifier.weight(1f).height(50.dp),
-                        enabled = !isProcessing && amountText.isNotEmpty(),
+                        enabled = !isProcessing && amountText.isNotEmpty() && !isAmountEnabled,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                     ) {
                         Text("Thanh toán", color = Color.White)
@@ -248,8 +271,19 @@ fun CanteenScreen(
             }
         }
 
-        if (isLoadingProducts) LinearProgressIndicator(Modifier.fillMaxWidth())
-        else ProductSection(products = dynamicProducts, quantities = selectedQuantities, onTotalAmountChange = { amountText = it.toString() })
+        if (isLoadingProducts) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        } else ProductSection(
+            products = dynamicProducts,
+            quantities = selectedQuantities,
+            onTotalAmountChange = { total ->
+                amountText = total.toString()
+                // Nếu có chọn món (tổng > 0), tự động khóa field nhập tiền
+                if (total > 0) {
+                    isAmountEnabled = false
+                }
+            }
+        )
     }
 
     // --- DIALOG HÓA ĐƠN ---
@@ -351,7 +385,10 @@ fun AdminPinInputDialog(
 }
 
 @Composable
-fun ProductSection(products: List<ProductItem>, quantities: MutableMap<String, Int>, onTotalAmountChange: (Int) -> Unit) {
+fun ProductSection(products: List<ProductItem>,
+                   quantities: MutableMap<String, Int>,
+                   onTotalAmountChange: (Int) -> Unit
+) {
     val total = products.sumOf { (quantities[it.name] ?: 0) * it.price }
     LaunchedEffect(total) { onTotalAmountChange(total) }
 
@@ -373,7 +410,11 @@ fun ProductSection(products: List<ProductItem>, quantities: MutableMap<String, I
 }
 
 @Composable
-fun ProductCard(modifier: Modifier, item: ProductItem, quantity: Int, onIncrease: () -> Unit, onDecrease: () -> Unit) {
+fun ProductCard(modifier: Modifier,
+                item: ProductItem,
+                quantity: Int,
+                onIncrease: () -> Unit,
+                onDecrease: () -> Unit) {
     Card(
         modifier = modifier.height(115.dp),
         onClick = { if (quantity == 0) onIncrease() },

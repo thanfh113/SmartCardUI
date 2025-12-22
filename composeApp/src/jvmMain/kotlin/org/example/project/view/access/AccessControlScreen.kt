@@ -185,7 +185,7 @@ fun AccessControlScreen(
 
             // 🔥 Nút Phòng Đặc Biệt: Admin show dialog cục bộ, User gọi callback cha
             AccessActionCard(
-                title = "Phòng Đặc Biệt",
+                title = "Phòng Máy Chủ",
                 subtitle = "Xác thực PIN",
                 icon = Icons.Default.AdminPanelSettings,
                 color = secureColor,

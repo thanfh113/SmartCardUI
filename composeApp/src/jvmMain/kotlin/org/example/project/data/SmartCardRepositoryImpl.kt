@@ -66,17 +66,21 @@ class SmartCardRepositoryImpl(
         private const val MAX_AVATAR_SIZE = 8192
 
         // ===== EMP INFO LAYOUT =====
-        private const val EMP_INFO_MAX = 128
-        private const val EMP_ID_OFFSET   = 0
         private const val EMP_ID_LEN      = 16
-        private const val EMP_NAME_OFFSET = 16
         private const val EMP_NAME_LEN    = 48
-        private const val EMP_DOB_OFFSET  = 64
         private const val EMP_DOB_LEN     = 16
-        private const val EMP_DEPT_OFFSET = 80
-        private const val EMP_DEPT_LEN    = 24
-        private const val EMP_POS_OFFSET  = 104
-        private const val EMP_POS_LEN     = 24
+        private const val EMP_DEPT_LEN    = 32
+        private const val EMP_POS_LEN     = 32
+
+        // Tính toán lại Offsets
+        private const val EMP_ID_OFFSET   = 0
+        private const val EMP_NAME_OFFSET = EMP_ID_OFFSET + EMP_ID_LEN     // 16
+        private const val EMP_DOB_OFFSET  = EMP_NAME_OFFSET + EMP_NAME_LEN // 64
+        private const val EMP_DEPT_OFFSET = EMP_DOB_OFFSET + EMP_DOB_LEN   // 80
+        private const val EMP_POS_OFFSET  = EMP_DEPT_OFFSET + EMP_DEPT_LEN // 112
+
+        // Tổng size mới: 16+48+16+32+32 = 144
+        private const val EMP_INFO_MAX    = EMP_POS_OFFSET + EMP_POS_LEN   // 144
 
         private const val LOG_SIZE = 32
 
