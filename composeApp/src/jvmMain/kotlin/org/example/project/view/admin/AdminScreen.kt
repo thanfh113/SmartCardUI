@@ -362,9 +362,23 @@ fun IssueCardDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                         val newEmp = Employee(id, name, dob, dept, pos, "USER", null, true)
                         if (!repo.checkCardInitialized()) repo.setupFirstPin("123456")
                         repo.verifyPin("123456")
-                        var avatarSuccess = true
-                        if (avatarBytes != null) avatarSuccess = repo.uploadAvatar(avatarBytes!!)
+                        
+                        // Bước 1: Ghi thông tin nhân viên vào thẻ
                         val issueSuccess = repo.issueCardForUser(newEmp)
+                        
+                        // Bước 2: Upload avatar (nếu có) - Reconnect nếu cần
+                        var avatarSuccess = true
+                        if (issueSuccess && avatarBytes != null) {
+                            // Reconnect để đảm bảo kết nối ổn định trước khi upload ảnh lớn
+                            repo.disconnect()
+                            Thread.sleep(200) // Chờ thẻ reset
+                            if (repo.connect() && repo.verifyPin("123456")) {
+                                avatarSuccess = repo.uploadAvatar(avatarBytes!!)
+                            } else {
+                                avatarSuccess = false
+                            }
+                        }
+                        
                         repo.disconnect()
                         withContext(Dispatchers.Main) { if (issueSuccess && avatarSuccess) onSuccess(name) else status = "Lỗi Server/Ghi thẻ!"; isProcessing = false }
                     } else withContext(Dispatchers.Main) { status = "Không tìm thấy thẻ!"; isProcessing = false }
