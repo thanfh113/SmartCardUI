@@ -170,59 +170,21 @@ fun ChangeProfileDialog(
                             ageErrorMessage = null // Reset lỗi khi gõ lại
                         })
 
-                        // 3. Phòng Ban (Dropdown)
-                        ExposedDropdownMenuBox(
-                            expanded = expandedDept,
-                            onExpandedChange = { expandedDept = !expandedDept }
-                        ) {
-                            OutlinedTextField(
-                                value = dept,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Phòng Ban") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDept) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            ExposedDropdownMenu(
-                                expanded = expandedDept,
-                                onDismissRequest = { expandedDept = false }
-                            ) {
-                                departmentNames.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = { Text(item) },
-                                        onClick = { dept = item; expandedDept = false }
-                                    )
-                                }
-                            }
-                        }
+                        // 3. Phòng Ban (Disabled - không cho phép chỉnh sửa)
+                        SimpleInfoField(
+                            label = "Phòng Ban",
+                            value = dept,
+                            onValueChange = {},
+                            readOnly = true
+                        )
 
-                        // 4. Chức Vụ (Dropdown)
-                        ExposedDropdownMenuBox(
-                            expanded = expandedPos,
-                            onExpandedChange = { expandedPos = !expandedPos }
-                        ) {
-                            OutlinedTextField(
-                                value = pos,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Chức Vụ") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedPos) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            ExposedDropdownMenu(
-                                expanded = expandedPos,
-                                onDismissRequest = { expandedPos = false }
-                            ) {
-                                positionNames.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = { Text(item) },
-                                        onClick = { pos = item; expandedPos = false }
-                                    )
-                                }
-                            }
-                        }
+                        // 4. Chức Vụ (Disabled - không cho phép chỉnh sửa)
+                        SimpleInfoField(
+                            label = "Chức Vụ",
+                            value = pos,
+                            onValueChange = {},
+                            readOnly = true
+                        )
 
                         // 5. Ngày Sinh
                         SimpleInfoField(

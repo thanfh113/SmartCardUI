@@ -199,13 +199,15 @@ fun EmployeeScreen(
                 Text(if (showDetails) "Ẩn chi tiết" else "Xem hồ sơ")
             }
 
-            // Nút Chỉnh sửa (Việt hóa)
-            OutlinedButton(
-                onClick = { showChangeProfileDialog = true },
-                modifier = Modifier.fillMaxWidth(0.6f).height(48.dp),
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Text("Chỉnh sửa hồ sơ")
+            // Nút Chỉnh sửa (Việt hóa) - Chỉ hiển thị khi đã xem chi tiết
+            if (showDetails) {
+                OutlinedButton(
+                    onClick = { showChangeProfileDialog = true },
+                    modifier = Modifier.fillMaxWidth(0.6f).height(48.dp),
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Text("Chỉnh sửa hồ sơ")
+                }
             }
 
             // Nút Đổi PIN (Việt hóa)
