@@ -139,88 +139,118 @@ fun AccessControlScreen(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        // --- HEADER ---
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            // --- HEADER ---
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if(userRole == "ADMIN") "Kiểm Soát (Admin Mode)" else "Kiểm Soát Ra Vào",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // --- ACTION BUTTONS AREA ---
+            Row(
+                modifier = Modifier.fillMaxWidth().height(140.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Nút Check-in
+                AccessActionCard(
+                    title = "Check In",
+                    subtitle = "Vào cổng chính",
+                    icon = Icons.AutoMirrored.Filled.Login,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                    onClick = { handleAccess(AccessType.CHECK_IN, "Vào cổng chính", "Cổng Chính") }
+                )
+
+                // Nút Check-out
+                AccessActionCard(
+                    title = "Check Out",
+                    subtitle = "Ra cổng chính",
+                    icon = Icons.AutoMirrored.Filled.Logout,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.weight(1f),
+                    onClick = { handleAccess(AccessType.CHECK_OUT, "Ra cổng chính", "Cổng Chính") }
+                )
+
+                // Nút Phòng Đặc Biệt: Admin show dialog cục bộ, User gọi callback cha
+                AccessActionCard(
+                    title = "Phòng Máy Chủ",
+                    subtitle = "Xác thực PIN",
+                    icon = Icons.Default.AdminPanelSettings,
+                    color = secureColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (userRole == "ADMIN") {
+                            showAdminPinDialog = true
+                        } else {
+                            // User: Yêu cầu nhập PIN trước khi ghi log (handled by parent)
+                            onRestrictedArea {
+                                handleAccess(AccessType.RESTRICTED_AREA, "Đã Truy Cập", "Server Room")
+                            }
+                        }
+                    }
+                )
+            }
+
+            HorizontalDivider()
+
+            // --- HISTORY LIST - Di chuyển lên ngay dưới action buttons ---
             Text(
-                text = if(userRole == "ADMIN") "Kiểm Soát (Admin Mode)" else "Kiểm Soát Ra Vào",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        // --- ACTION BUTTONS AREA ---
-        Row(
-            modifier = Modifier.fillMaxWidth().height(140.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Nút Check-in
-            AccessActionCard(
-                title = "Check In",
-                subtitle = "Vào cổng chính",
-                icon = Icons.AutoMirrored.Filled.Login,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f),
-                onClick = { handleAccess(AccessType.CHECK_IN, "Vào cổng chính", "Cổng Chính") }
+                text = if(userRole == "ADMIN") "Log của Admin được lưu trên Server (Xem tại tab Lịch sử)" else "Nhật ký hoạt động trên thẻ",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Nút Check-out
-            AccessActionCard(
-                title = "Check Out",
-                subtitle = "Ra cổng chính",
-                icon = Icons.AutoMirrored.Filled.Logout,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.weight(1f),
-                onClick = { handleAccess(AccessType.CHECK_OUT, "Ra cổng chính", "Cổng Chính") }
-            )
+            if (userRole != "ADMIN") {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(logs) { log ->
+                        val (icon, iconColor) = when (log.accessType) {
+                            AccessType.CHECK_IN -> Icons.AutoMirrored.Filled.Login to MaterialTheme.colorScheme.primary
+                            AccessType.CHECK_OUT -> Icons.AutoMirrored.Filled.Logout to MaterialTheme.colorScheme.secondary
+                            AccessType.RESTRICTED_AREA -> Icons.Default.AdminPanelSettings to secureColor
+                        }
 
-            // 🔥 Nút Phòng Đặc Biệt: Admin show dialog cục bộ, User gọi callback cha
-            AccessActionCard(
-                title = "Phòng Máy Chủ",
-                subtitle = "Xác thực PIN",
-                icon = Icons.Default.AdminPanelSettings,
-                color = secureColor,
-                modifier = Modifier.weight(1f),
-                onClick = {
-                    if (userRole == "ADMIN") {
-                        showAdminPinDialog = true
-                    } else {
-                        // User: Yêu cầu nhập PIN trước khi ghi log (handled by parent)
-                        onRestrictedArea {
-                            handleAccess(AccessType.RESTRICTED_AREA, "Đã Truy Cập", "Server Room")
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            ListItem(
+                                leadingContent = { Icon(icon, contentDescription = null, tint = iconColor) },
+                                headlineContent = {
+                                    val displayName = if (log.accessType == AccessType.RESTRICTED_AREA) "Phòng Đặc Biệt" else log.accessType.name
+                                    Text(displayName, fontWeight = FontWeight.Bold, color = iconColor)
+                                },
+                                supportingContent = { Text(log.description) },
+                                trailingContent = { Text(log.time.format(formatter), style = MaterialTheme.typography.bodySmall) },
+                                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                            )
                         }
                     }
                 }
-            )
-        }
-
-        // Thông báo trạng thái (Feedback)
-        if (message != null) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text(message!!, style = MaterialTheme.typography.bodyMedium)
-                }
+            } else {
+                Spacer(Modifier.weight(1f)) // Placeholder cho Admin
             }
         }
 
-        // 🔥 DIALOG MỚI: XÁC THỰC PIN ADMIN CỤC BỘ (Tối ưu hóa UI/UX)
+        // DIALOG MỚI: XÁC THỰC PIN ADMIN CỤC BỘ (Tối ưu hóa UI/UX)
         if (showAdminPinDialog) {
             AdminPinInputDialog(
                 onDismiss = { showAdminPinDialog = false; message = null },
@@ -241,49 +271,26 @@ fun AccessControlScreen(
             )
         }
 
-        Divider()
-
-        // --- HISTORY LIST (Giữ nguyên) ---
-        Text(
-            text = if(userRole == "ADMIN") "Log của Admin được lưu trên Server (Xem tại tab Lịch sử)" else "Nhật ký hoạt động trên thẻ",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (userRole != "ADMIN") {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        // Thông báo dạng Snackbar ở dưới cùng màn hình
+        if (message != null) {
+            Snackbar(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                action = {
+                    TextButton(onClick = { message = null }) {
+                        Text("Đóng")
+                    }
+                },
+                containerColor = if (message!!.startsWith("✅")) 
+                    MaterialTheme.colorScheme.primaryContainer 
+                else 
+                    MaterialTheme.colorScheme.errorContainer,
+                contentColor = if (message!!.startsWith("✅"))
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                else
+                    MaterialTheme.colorScheme.onErrorContainer
             ) {
-                items(logs) { log ->
-                    val (icon, iconColor) = when (log.accessType) {
-                        AccessType.CHECK_IN -> Icons.AutoMirrored.Filled.Login to MaterialTheme.colorScheme.primary
-                        AccessType.CHECK_OUT -> Icons.AutoMirrored.Filled.Logout to MaterialTheme.colorScheme.secondary
-                        AccessType.RESTRICTED_AREA -> Icons.Default.AdminPanelSettings to secureColor
-                    }
-
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        ListItem(
-                            leadingContent = { Icon(icon, contentDescription = null, tint = iconColor) },
-                            headlineContent = {
-                                val displayName = if (log.accessType == AccessType.RESTRICTED_AREA) "Phòng Đặc Biệt" else log.accessType.name
-                                Text(displayName, fontWeight = FontWeight.Bold, color = iconColor)
-                            },
-                            supportingContent = { Text(log.description) },
-                            trailingContent = { Text(log.time.format(formatter), style = MaterialTheme.typography.bodySmall) },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                        )
-                    }
-                }
+                Text(message!!)
             }
-        } else {
-            Spacer(Modifier.weight(1f)) // Placeholder cho Admin
         }
     }
 }
