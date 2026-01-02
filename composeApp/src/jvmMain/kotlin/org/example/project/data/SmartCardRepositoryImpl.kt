@@ -194,6 +194,13 @@ class SmartCardRepositoryImpl(
         return isSw9000(api.sendApdu(apdu))
     }
 
+    private fun getChallengeFromCard(): ByteArray? {
+        // Gửi lệnh 0x2F (INS_GET_CHALLENGE)
+        val resp = api.sendApdu(byteArrayOf(0x80.toByte(), 0x2F, 0x00, 0x00, 0x10)) // Le = 16
+        if (!isSw9000(resp)) return null
+        return dataPart(resp) // Trả về 16 bytes Nonce
+    }
+
     override fun verifyPin(input: String): Boolean {
         // Kiểm tra thẻ có bị khóa không trước khi verify
         if (isCardLocked()) {
@@ -201,9 +208,40 @@ class SmartCardRepositoryImpl(
             return false
         }
 
+        // 1. Lấy Salt & Tính Derived Key
         val salt = getSaltFromCard() ?: return false
-        val derivedKey = computeArgon2Hash(input, salt)
-        val apdu = byteArrayOf(0x80.toByte(), INS_VERIFY_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
+        val pinHash = computeArgon2Hash(input, salt) // 16 bytes
+
+        // 2. Lấy Challenge (Nonce) từ thẻ - Chống Replay
+        val nonce = getChallengeFromCard()
+        if (nonce == null || nonce.size != 16) {
+            println("❌ Không lấy được Challenge từ thẻ!")
+            return false
+        }
+
+        // 3. Ghép [Nonce + PIN Hash]
+        val payload = ByteBuffer.allocate(32)
+            .put(nonce)    // 16 bytes đầu là Nonce
+            .put(pinHash)  // 16 bytes sau là PIN Hash
+            .array()
+
+        // 4. Mã hóa RSA (Chống đọc lén)
+        val publicKey = getPublicKeyFromCard() ?: return false
+        val cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, publicKey)
+
+        // Output sẽ là 128 bytes (với key RSA 1024 bit)
+        val encryptedBlock = cipher.doFinal(payload)
+
+        // 5. Gửi xuống thẻ
+        val apdu = byteArrayOf(
+            0x80.toByte(),
+            INS_VERIFY_PIN,
+            0x00,
+            0x00,
+            encryptedBlock.size.toByte()
+        ) + encryptedBlock
+
         return isSw9000(api.sendApdu(apdu))
     }
     private fun isSwPinIdentical(resp: ByteArray): Boolean {
