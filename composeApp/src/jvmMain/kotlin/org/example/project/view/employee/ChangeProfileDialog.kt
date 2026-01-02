@@ -156,7 +156,7 @@ fun ChangeProfileDialog(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 
-                        // 1. ID (KHÓA HOÀN TOÀN)
+                        // 1. ID (LUÔN KHÓA với cả User và Admin khi sửa)
                         SimpleInfoField(
                             label = "Mã Nhân Viên (Hệ thống tự động)",
                             value = id,
@@ -164,67 +164,89 @@ fun ChangeProfileDialog(
                             readOnly = true
                         )
 
-                        // 2. Họ Tên
+                        // 2. Họ Tên (Cả hai đều được sửa)
                         SimpleInfoField("Họ và Tên", name, {
                             name = it
-                            ageErrorMessage = null // Reset lỗi khi gõ lại
+                            ageErrorMessage = null
                         })
 
-                        // 3. Phòng Ban (Dropdown)
-                        ExposedDropdownMenuBox(
-                            expanded = expandedDept,
-                            onExpandedChange = { expandedDept = !expandedDept }
-                        ) {
-                            OutlinedTextField(
+                        // 3. Phòng Ban
+                        if (isAdmin) {
+                            // Nếu là ADMIN: Cho phép chọn từ Dropdown
+                            ExposedDropdownMenuBox(
+                                expanded = expandedDept,
+                                onExpandedChange = { expandedDept = !expandedDept }
+                            ) {
+                                OutlinedTextField(
+                                    value = dept,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Phòng Ban") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDept) },
+                                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = expandedDept,
+                                    onDismissRequest = { expandedDept = false }
+                                ) {
+                                    departmentNames.forEach { item ->
+                                        DropdownMenuItem(
+                                            text = { Text(item) },
+                                            onClick = { dept = item; expandedDept = false }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // Nếu là USER: Chỉ cho xem (ReadOnly)
+                            SimpleInfoField(
+                                label = "Phòng Ban",
                                 value = dept,
                                 onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Phòng Ban") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDept) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
+                                readOnly = true
                             )
-                            ExposedDropdownMenu(
-                                expanded = expandedDept,
-                                onDismissRequest = { expandedDept = false }
-                            ) {
-                                departmentNames.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = { Text(item) },
-                                        onClick = { dept = item; expandedDept = false }
-                                    )
-                                }
-                            }
                         }
 
-                        // 4. Chức Vụ (Dropdown)
-                        ExposedDropdownMenuBox(
-                            expanded = expandedPos,
-                            onExpandedChange = { expandedPos = !expandedPos }
-                        ) {
-                            OutlinedTextField(
+                        // 4. Chức Vụ
+                        if (isAdmin) {
+                            // Nếu là ADMIN: Cho phép chọn từ Dropdown
+                            ExposedDropdownMenuBox(
+                                expanded = expandedPos,
+                                onExpandedChange = { expandedPos = !expandedPos }
+                            ) {
+                                OutlinedTextField(
+                                    value = pos,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Chức Vụ") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedPos) },
+                                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = expandedPos,
+                                    onDismissRequest = { expandedPos = false }
+                                ) {
+                                    positionNames.forEach { item ->
+                                        DropdownMenuItem(
+                                            text = { Text(item) },
+                                            onClick = { pos = item; expandedPos = false }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // Nếu là USER: Chỉ cho xem (ReadOnly)
+                            SimpleInfoField(
+                                label = "Chức Vụ",
                                 value = pos,
                                 onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Chức Vụ") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedPos) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
+                                readOnly = true
                             )
-                            ExposedDropdownMenu(
-                                expanded = expandedPos,
-                                onDismissRequest = { expandedPos = false }
-                            ) {
-                                positionNames.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = { Text(item) },
-                                        onClick = { pos = item; expandedPos = false }
-                                    )
-                                }
-                            }
                         }
 
-                        // 5. Ngày Sinh
+                        // 5. Ngày Sinh (Cả hai đều được sửa)
                         SimpleInfoField(
                             label = "Ngày Sinh",
                             value = dob,

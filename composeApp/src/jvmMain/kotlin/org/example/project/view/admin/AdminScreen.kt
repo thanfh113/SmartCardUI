@@ -383,14 +383,19 @@ fun IssueCardDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
 fun EditCardDialog(user: UserResponse, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     val repo = CardRepositoryProvider.current
     val scope = rememberCoroutineScope()
+
     var newName by remember { mutableStateOf(user.name) }
     var newDept by remember { mutableStateOf(user.department ?: "") }
     var newPos by remember { mutableStateOf(user.position ?: "") }
-    var newDob by remember { mutableStateOf(user.dob ?: "") }
+    var newDob by remember { mutableStateOf(user.dob ?: "01/01/2000") }
+
     var status by remember { mutableStateOf("") }
     var isProcessing by remember { mutableStateOf(false) }
+
+    // --- KHAI BÁO STATE CHO AVATAR ---
     var avatarBytes by remember { mutableStateOf<ByteArray?>(null) }
     var avatarBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+
     var departmentsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var positionsMap by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -399,7 +404,16 @@ fun EditCardDialog(user: UserResponse, onDismiss: () -> Unit, onSuccess: () -> U
     LaunchedEffect(Unit) {
         launch(Dispatchers.IO) {
             repo.disconnect()
-            if (repo.connect()) { repo.getAvatar().let { if (it.isNotEmpty()) avatarBitmap = ImageUtils.bytesToBitmap(it) }; repo.disconnect() }
+            if (repo.connect()) {
+                // 1. ĐỌC ẢNH TỪ THẺ KHI BẮT ĐẦU CHỈNH SỬA
+                repo.getAvatar().let { if (it.isNotEmpty()) avatarBitmap = ImageUtils.bytesToBitmap(it) }
+
+                val cardData = repo.getEmployee()
+                withContext(Dispatchers.Main) {
+                    if (cardData.dob.isNotBlank()) newDob = cardData.dob
+                }
+                repo.disconnect()
+            }
             departmentsMap = repo.getDepartmentsMap()
             positionsMap = repo.getPositionsMap()
         }
@@ -409,41 +423,114 @@ fun EditCardDialog(user: UserResponse, onDismiss: () -> Unit, onSuccess: () -> U
         onDismissRequest = { if (!isProcessing) onDismiss() },
         title = { Text("Sửa Thông Tin: ${user.name}") },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                EditableAvatar(currentBitmap = avatarBitmap, fallbackName = newName, onPickImage = { pickFile()?.let { filePath -> ImageUtils.processImageForCard(filePath)?.let { avatarBytes = it; avatarBitmap = ImageUtils.bytesToBitmap(it) } } })
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // 2. HIỂN THỊ AVATAR VÀ NÚT CHỌN ẢNH MỚI
+                EditableAvatar(
+                    currentBitmap = avatarBitmap,
+                    fallbackName = newName,
+                    onPickImage = {
+                        pickFile()?.let { filePath ->
+                            ImageUtils.processImageForCard(filePath)?.let { bytes ->
+                                avatarBytes = bytes
+                                avatarBitmap = ImageUtils.bytesToBitmap(bytes)
+                            }
+                        }
+                    }
+                )
+
                 OutlinedTextField(value = user.employeeId, onValueChange = {}, label = { Text("Mã NV (Khóa)") }, modifier = Modifier.fillMaxWidth(), enabled = false, readOnly = true)
+
                 DataSelector(label = "Phòng ban", currentValue = newDept, onValueSelected = { newDept = it }, items = departmentsMap.values.toList())
                 DataSelector(label = "Chức vụ", currentValue = newPos, onValueSelected = { newPos = it }, items = positionsMap.values.toList())
+
                 OutlinedTextField(newName, { newName = it }, label = { Text("Họ tên") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = newDob, onValueChange = { newDob = it }, label = { Text("Ngày sinh") }, modifier = Modifier.fillMaxWidth(), readOnly = true, trailingIcon = { IconButton(onClick = { showDatePicker = true }) { Icon(Icons.Default.CalendarMonth, null) } })
-                if (status.isNotEmpty()) Text(status, color = Color.Red, style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = newDob,
+                    onValueChange = { newDob = it },
+                    label = { Text("Ngày sinh") },
+                    modifier = Modifier.fillMaxWidth(),
+                    readOnly = true,
+                    trailingIcon = { IconButton(onClick = { showDatePicker = true }) { Icon(Icons.Default.CalendarMonth, null) } }
+                )
+
+                if (status.isNotEmpty()) {
+                    Text(status, color = if (status.contains("❌")) Color.Red else Color(0xFF1BAA61), style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = {
             Button(enabled = !isProcessing, onClick = {
                 try {
                     val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
-                    if (Period.between(LocalDate.parse(newDob, formatter), LocalDate.now()).years < 15) { status = "❌ Nhân viên phải từ đủ 15 tuổi!"; return@Button }
-                } catch (e: Exception) { status = "❌ Ngày sinh không hợp lệ!"; return@Button }
+                    if (Period.between(LocalDate.parse(newDob, formatter), LocalDate.now()).years < 15) {
+                        status = "❌ Nhân viên phải từ đủ 15 tuổi!"
+                        return@Button
+                    }
+                } catch (e: Exception) {
+                    status = "❌ Ngày sinh không hợp lệ!"
+                    return@Button
+                }
 
                 scope.launch(Dispatchers.IO) {
-                    isProcessing = true; repo.disconnect()
-                    if (repo.connect()) {
-                        val cardData = repo.getEmployee()
-                        if (cardData.id == user.employeeId) {
-                            repo.updateEmployee(cardData.copy(name = newName, department = newDept, position = newPos, dob = newDob))
-                            if (avatarBytes != null) repo.uploadAvatar(avatarBytes!!)
-                            repo.disconnect(); withContext(Dispatchers.Main) { onSuccess() }
-                        } else { repo.disconnect(); withContext(Dispatchers.Main) { status = "Sai thẻ!" } }
-                    } else withContext(Dispatchers.Main) { status = "Không thấy thẻ!" }
-                    isProcessing = false
+                    isProcessing = true
+                    try {
+                        if (repo.connect()) {
+                            // Bước 1: Xác thực quyền Admin (Bắt buộc để nạp Master Key)
+                            // Lưu ý: Đảm bảo repo.updateEmployee KHÔNG gọi disconnect() bên trong
+                            // hoặc bạn cần viết một hàm updateEmployeeAdmin chuyên biệt.
+
+                            val updatedEmp = Employee(
+                                id = user.employeeId,
+                                name = newName,
+                                dob = newDob,
+                                department = newDept,
+                                position = newPos,
+                                role = "USER",
+                                isDefaultPin = false
+                            )
+
+                            // Cập nhật thông tin (Tên, Dept, Pos...)
+                            repo.updateEmployee(updatedEmp)
+
+                            // Cập nhật Avatar ngay lập tức khi vẫn còn giữ kết nối và quyền Admin
+                            if (avatarBytes != null) {
+                                withContext(Dispatchers.Main) { status = "⏳ Đang tải ảnh lên thẻ..." }
+                                repo.uploadAvatar(avatarBytes!!)
+                            }
+
+                            withContext(Dispatchers.Main) { onSuccess() }
+                        } else {
+                            withContext(Dispatchers.Main) { status = "❌ Không thấy thẻ!" }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { status = "❌ Lỗi: ${e.message}" }
+                    } finally {
+                        repo.disconnect() // Chỉ disconnect một lần duy nhất ở đây
+                        isProcessing = false
+                    }
                 }
             }) { Text("Lưu") }
         },
         dismissButton = { TextButton({ onDismiss() }) { Text("Hủy") } }
     )
+
     if (showDatePicker) {
-        DatePickerDialog(onDismissRequest = { showDatePicker = false }, confirmButton = { TextButton(onClick = { datePickerState.selectedDateMillis?.let { newDob = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }; showDatePicker = false }) { Text("OK") } }, dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Hủy") } }) { DatePicker(state = datePickerState) }
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let {
+                        newDob = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                    }
+                    showDatePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Hủy") } }
+        ) { DatePicker(state = datePickerState) }
     }
 }
 

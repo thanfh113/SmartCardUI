@@ -270,6 +270,7 @@ class SmartCardRepositoryImpl(
 
     // --- QUẢN LÝ THÔNG TIN NHÂN VIÊN ---
     override fun getEmployee(): Employee {
+        autoVerifyAdmin()
         val resp = api.sendApdu(byteArrayOf(0x80.toByte(), INS_READ_INFO, 0x00, 0x00, 0x00))
         if (!isSw9000(resp)) return defaultEmployee()
         val data = dataPart(resp)
@@ -331,24 +332,53 @@ class SmartCardRepositoryImpl(
         cachedCardID = null
         return emp
     }
+    private fun autoVerifyAdmin(): Boolean {
+        val adminKey = "ADMIN_KEY_2025".toByteArray().plus(byteArrayOf(0x00, 0x00))
+        val verifyApdu = byteArrayOf(0x80.toByte(), 0x2F.toByte(), 0x00, 0x00, 0x10.toByte()) + adminKey
+        val resp = api.sendApdu(verifyApdu)
+        return isSw9000(resp)
+    }
 
     override fun updateEmployee(newEmployee: Employee) {
-        updateEmployeeOffline(newEmployee)
-        val cardUuid = bytesToHex(getCardID())
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                client.post("$SERVER_URL/update") {
-                    contentType(ContentType.Application.Json)
-                    setBody(UpdateInfoRequest(
-                        cardUuid = cardUuid,
-                        employeeId = newEmployee.id,
-                        name = newEmployee.name,
-                        dob = newEmployee.dob,
-                        department = newEmployee.department,
-                        position = newEmployee.position
-                    ))
+        runBlocking {
+            // 1. Phải kết nối thẻ trước
+            if (connect()) {
+                try {
+                    // 2. Gửi mã Admin Key (ADMIN_KEY_2025) để lấy quyền ghi vào thẻ
+                    // Lệnh INS_VERIFY_ADMIN: 0x2F (như đã thêm trong Applet)
+                    val adminKey = "ADMIN_KEY_2025".toByteArray().plus(ByteArray(2)) // Đủ 16 byte
+                    val verifyApdu = byteArrayOf(0x80.toByte(), 0x2F.toByte(), 0x00, 0x00, 0x10.toByte()) + adminKey
+                    val resp = api.sendApdu(verifyApdu)
+
+                    // 3. Nếu thẻ trả về 9000 (Thành công) mới tiến hành ghi Offline
+                    if (isSw9000(resp)) {
+                        updateEmployeeOffline(newEmployee)
+
+                        // 4. Ghi thành công vào thẻ rồi mới cập nhật lên Server
+                        val cardUuid = bytesToHex(getCardID())
+                        client.post("$SERVER_URL/update") {
+                            contentType(ContentType.Application.Json)
+                            setBody(UpdateInfoRequest(
+                                cardUuid = cardUuid,
+                                employeeId = newEmployee.id,
+                                name = newEmployee.name,
+                                dob = newEmployee.dob,
+                                department = newEmployee.department,
+                                position = newEmployee.position
+                            ))
+                        }
+                        println("✅ Cập nhật thông tin thành công cả Thẻ và Server")
+                    } else {
+                        println("❌ Thẻ từ chối quyền Admin!")
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    disconnect()
                 }
-            } catch (e: Exception) { e.printStackTrace() }
+            } else {
+                println("❌ Không tìm thấy thẻ trên đầu đọc")
+            }
         }
     }
 
@@ -584,18 +614,53 @@ class SmartCardRepositoryImpl(
 
     // --- AVATAR & SERVER (Giữ nguyên) ---
     override fun uploadAvatar(imageBytes: ByteArray): Boolean {
-        var offset = 0
-        while (offset < imageBytes.size) {
-            val chunkSize = min(MAX_APDU_DATA_SIZE, imageBytes.size - offset)
-            val chunk = imageBytes.copyOfRange(offset, offset + chunkSize)
-            val cmd = CommandAPDU(0x00, INS_UPDATE_AVATAR, (offset shr 8) and 0xFF, offset and 0xFF, chunk)
-            if (!isSw9000(api.sendApdu(cmd.bytes))) return false
-            offset += chunkSize
+        // 1. Tự động kết nối lại nếu kết nối đã bị đóng bởi hàm update trước đó
+        if (!connect()) {
+            println("❌ Không thể kết nối lại thẻ để tải ảnh")
+            return false
         }
-        return true
+
+        try {
+            // 2. Bắt buộc verify Admin để nạp Master Key vào RAM thẻ (cho phép mã hóa ảnh)
+            if (!autoVerifyAdmin()) {
+                println("❌ Xác thực Admin thất bại khi tải ảnh")
+                return false
+            }
+
+            var offset = 0
+            while (offset < imageBytes.size) {
+                val chunkSize = min(MAX_APDU_DATA_SIZE, imageBytes.size - offset)
+                val chunk = imageBytes.copyOfRange(offset, offset + chunkSize)
+
+                // Sử dụng CommandAPDU để đóng gói dữ liệu
+                val cmd = CommandAPDU(
+                    0x80.toInt(), // Class (Sử dụng 0x80 khớp với Applet)
+                    INS_UPDATE_AVATAR, // 0x10
+                    (offset shr 8) and 0xFF, // P1 (High byte của offset)
+                    offset and 0xFF,         // P2 (Low byte của offset)
+                    chunk
+                )
+
+                val resp = api.sendApdu(cmd.bytes)
+                if (!isSw9000(resp)) {
+                    println("❌ Lỗi ghi chunk tại offset $offset: ${bytesToHex(resp)}")
+                    return false
+                }
+                offset += chunkSize
+            }
+            println("✅ Tải ảnh lên thẻ thành công")
+            return true
+        } catch (e: Exception) {
+            println("❌ Lỗi ngoại lệ khi tải ảnh: ${e.message}")
+            return false
+        } finally {
+            // Ngắt kết nối sau khi hoàn tất chu kỳ
+            disconnect()
+        }
     }
 
     override fun getAvatar(): ByteArray {
+        autoVerifyAdmin()
         val fullData = java.io.ByteArrayOutputStream()
         var offset = 0
         while (offset < MAX_AVATAR_SIZE) {
