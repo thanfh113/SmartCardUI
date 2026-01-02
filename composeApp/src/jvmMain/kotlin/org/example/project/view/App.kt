@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,6 +28,7 @@ import org.example.project.view.admin.AdminScreen
 import org.example.project.view.canteen.CanteenScreen
 import org.example.project.view.common.CreatePinDialog
 import org.example.project.view.common.PinDialog
+import org.example.project.view.common.PinInputField
 import org.example.project.view.employee.EmployeeScreen
 import org.example.project.view.employee.EmployeeViewModel
 import org.example.project.view.history.HistoryScreen
@@ -519,20 +521,59 @@ fun AdminLoginDialog(onDismiss: () -> Unit, onLoginSuccess: () -> Unit) {
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Đăng nhập Admin (Server)") },
+        icon = { Icon(Icons.Default.AdminPanelSettings, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("Đăng nhập Admin (Server)", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = { pin = it },
-                    label = { Text("Mã PIN Quản trị") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (isLoading) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    Text("Đang kiểm tra Server...", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Mã PIN Quản trị (6 số)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        
+                        PinInputField(
+                            value = pin,
+                            onValueChange = { pin = it; error = null },
+                            enabled = !isLoading,
+                            isPassword = !passwordVisible
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            TextButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    if (passwordVisible) "Ẩn PIN" else "Hiện PIN",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
@@ -544,7 +585,7 @@ fun AdminLoginDialog(onDismiss: () -> Unit, onLoginSuccess: () -> Unit) {
                     isLoading = false
                     if (ok) onLoginSuccess() else error = "Sai mã PIN hoặc lỗi Server!"
                 }
-            }, enabled = !isLoading) {
+            }, enabled = pin.length == 6 && !isLoading) {
                 Text(if (isLoading) "Đang kiểm tra..." else "Đăng nhập")
             }
         },

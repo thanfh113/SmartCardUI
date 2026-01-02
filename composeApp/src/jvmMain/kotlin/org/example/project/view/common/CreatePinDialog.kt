@@ -10,7 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import org.example.project.view.employee.PinInputField // Tận dụng component cũ
+// import org.example.project.view.employee.PinInputField // Cũ
+// Không cần import vì file này đã ở trong cung package common
 
 @Composable
 fun CreatePinDialog(
@@ -43,8 +44,34 @@ fun CreatePinDialog(
                         CircularProgressIndicator()
                     }
                 } else {
-                    PinInputField(pin1, { pin1 = it; localError = null }, "Nhập mã PIN mới")
-                    PinInputField(pin2, { pin2 = it; localError = null }, "Xác nhận mã PIN")
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Nhập mã PIN mới (6 số)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        PinInputField(
+                            value = pin1,
+                            onValueChange = { pin1 = it; localError = null },
+                            isPassword = true
+                        )
+                        
+                        Spacer(Modifier.height(8.dp))
+                        
+                        Text(
+                            text = "Xác nhận mã PIN (6 số)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        PinInputField(
+                            value = pin2,
+                            onValueChange = { pin2 = it; localError = null },
+                            isPassword = true
+                        )
+                    }
                 }
 
                 // 🔥 HIỂN THỊ LỖI: Ưu tiên lỗi từ thẻ/server (externalError) trước
@@ -62,9 +89,9 @@ fun CreatePinDialog(
         },
         confirmButton = {
             Button(
-                enabled = !isLoading,
+                enabled = !isLoading && pin1.length == 6 && pin2.length == 6,
                 onClick = {
-                    if (pin1.length < 4) localError = "PIN quá ngắn (tối thiểu 4 số)"
+                    if (pin1.length != 6) localError = "PIN phải có đúng 6 số"
                     else if (pin1 != pin2) localError = "Hai mã PIN không khớp"
                     else {
                         isLoading = true

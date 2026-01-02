@@ -74,30 +74,53 @@ fun PinDialog(
                     CircularProgressIndicator(modifier = Modifier.padding(16.dp))
                     Text("Đang xác thực bảo mật...", style = MaterialTheme.typography.bodySmall)
                 } else if (!cardState.isBlocked) {
-                    // (Giữ nguyên code OutlinedTextField cũ)
-                    OutlinedTextField(
-                        value = pinText,
-                        onValueChange = { if (it.length <= 8 && it.all { c -> c.isDigit() }) pinText = it },
-                        label = { Text("Nhập mã PIN") },
-                        singleLine = true,
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        isError = isError,
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Nhập mã PIN (6 số)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        
+                        PinInputField(
+                            value = pinText,
+                            onValueChange = { pinText = it },
+                            enabled = true,
+                            isPassword = !passwordVisible,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { passwordVisible = !passwordVisible }) {
                                 Icon(
                                     imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = null
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (passwordVisible) "Ẩn PIN" else "Hiện PIN",
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                             }
-                        },
-                        supportingText = {
-                            if (isError) {
-                                Text("PIN sai! Còn lại $currentTries/$maxTries lần.", color = MaterialTheme.colorScheme.error)
-                            }
                         }
-                    )
+                        
+                        if (isError) {
+                            Text(
+                                text = "PIN sai! Còn lại $currentTries/$maxTries lần.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
 
                 if (cardState.isBlocked) {
@@ -127,8 +150,8 @@ fun PinDialog(
         },
         confirmButton = {
             Button(
-                // Khóa nút xác nhận khi thẻ bị Block
-                enabled = !cardState.isBlocked && pinText.isNotEmpty() && !isLoading,
+                // Khóa nút xác nhận khi thẻ bị Block hoặc chưa đủ 6 số
+                enabled = !cardState.isBlocked && pinText.length == 6 && !isLoading,
                 onClick = {
                     isLoading = true
                     onPinOk(pinText)

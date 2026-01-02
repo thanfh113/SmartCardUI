@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.example.project.data.CardRepositoryProvider
 import org.example.project.model.Product
+import org.example.project.view.common.PinInputField
 import java.text.NumberFormat
 import java.util.Locale
 import androidx.compose.ui.draw.alpha
@@ -524,24 +525,52 @@ fun AdminPinInputDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Nhập PIN quản trị viên để hoàn tất thanh toán.")
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = { if (it.all { c -> c.isDigit() }) onPinChange(it) },
-                    label = { Text("PIN Admin") },
-                    modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    trailingIcon = {
-                        val icon = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff
-                        IconButton(onClick = { passwordVisible = !passwordVisible }) { Icon(icon, null) }
-                    },
-                    shape = RoundedCornerShape(12.dp)
-                )
+                
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Mã PIN Admin (6 số)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    PinInputField(
+                        value = pin,
+                        onValueChange = onPinChange,
+                        enabled = !isChecking,
+                        isPassword = !passwordVisible
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        TextButton(
+                            onClick = { passwordVisible = !passwordVisible },
+                            enabled = !isChecking
+                        ) {
+                            Icon(
+                                if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (passwordVisible) "Ẩn PIN" else "Hiện PIN",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+                
                 if (error != null) Text(error, color = Color.Red, fontWeight = FontWeight.Bold)
             }
         },
         confirmButton = {
-            Button(onClick = { onPinConfirmed(pin) }, enabled = !isChecking && pin.length >= 4) {
+            Button(onClick = { onPinConfirmed(pin) }, enabled = !isChecking && pin.length == 6) {
                 if (isChecking) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White) else Text("Xác nhận")
             }
         },

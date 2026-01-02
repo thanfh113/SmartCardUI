@@ -32,6 +32,7 @@ import org.example.project.data.CardRepositoryProvider
 import org.example.project.model.AccessLogEntry
 import org.example.project.model.AccessType
 import org.example.project.model.HistoryLogEntry
+import org.example.project.view.common.PinInputField
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -391,32 +392,57 @@ fun AdminPinInputDialog(
                     Text("Đang kiểm tra Server...", style = MaterialTheme.typography.labelMedium)
                 }
 
-                OutlinedTextField(
-                    value = pin,
-                    onValueChange = {
-                        localError = null
-                        if (it.all { c -> c.isDigit() }) pin = it
-                    },
-                    label = { Text("Mã PIN") },
-                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    singleLine = true,
-                    enabled = !isChecking,
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = {
-                        IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = !isChecking) {
-                            Icon(if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff, null)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Nhập mã PIN Admin (6 số)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    
+                    PinInputField(
+                        value = pin,
+                        onValueChange = {
+                            localError = null
+                            pin = it
+                        },
+                        enabled = !isChecking,
+                        isPassword = !passwordVisible
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        TextButton(
+                            onClick = { passwordVisible = !passwordVisible },
+                            enabled = !isChecking
+                        ) {
+                            Icon(
+                                if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (passwordVisible) "Ẩn PIN" else "Hiện PIN",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
-                )
+                }
+                
                 if (localError != null) Text(localError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    if (pin.length < 4) {
-                        localError = "PIN phải có ít nhất 4 ký tự."
+                    if (pin.length != 6) {
+                        localError = "PIN phải có đúng 6 số."
                     } else {
                         isChecking = true
                         scope.launch {
@@ -425,7 +451,7 @@ fun AdminPinInputDialog(
                         }
                     }
                 },
-                enabled = pin.length >= 4 && !isChecking
+                enabled = pin.length == 6 && !isChecking
             ) {
                 Text(if (isChecking) "Đang xác thực..." else "Xác nhận")
             }
