@@ -31,6 +31,8 @@ import kotlinx.coroutines.withContext
 import org.example.project.data.CardRepositoryProvider
 import org.example.project.model.AccessLogEntry
 import org.example.project.model.AccessType
+import org.example.project.model.HistoryLogEntry
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 @Composable
@@ -53,25 +55,89 @@ fun AccessControlScreen(
     // Màu tím bảo mật (Deep Purple)
     val secureColor = Color(0xFF673AB7)
 
-    // Hàm load Log thẻ (cho User)
+    // Hàm load Log từ Server (Clone từ HistoryScreen)
     fun loadUserLogs() {
-        if (userRole != "ADMIN") {
-            scope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
+            // 1. Xác định Employee ID cần lấy log
+            val employeeIdToFetch = try {
+                // Admin không cần ID (null) -> Server trả về tất cả
+                if (userRole == "ADMIN") {
+                    println("[AccessControl] ADMIN mode - fetching all logs")
+                    null
+                }
+                // User cần ID của mình -> Server trả về logs cá nhân
+                else {
+                    val empId = repo.getEmployee().id.trim()
+                    println("[AccessControl] USER mode - fetching logs for ID: $empId")
+                    if (empId.isBlank()) {
+                        throw IllegalStateException("Employee ID is blank")
+                    }
+                    empId
+                }
+            } catch (e: Exception) {
+                println("[AccessControl] ERROR getting employee ID: ${e.message}")
+                e.printStackTrace()
+                null
+            }
+
+            // Nếu là User và không lấy được ID, thoát
+            if (userRole == "USER" && employeeIdToFetch == null) {
+                return@launch
+            }
+
+            // 2. Gọi API Server lấy logs (giống HistoryScreen)
+            val serverLogs: List<HistoryLogEntry> = try {
+                repo.getServerLogs(employeeIdToFetch)
+            } catch (e: Exception) {
+                println("[AccessControl] ERROR fetching server logs: ${e.message}")
+                e.printStackTrace()
+                emptyList()
+            }
+
+            // 3. Parse và lọc chỉ lấy Access Logs (không lấy transactions)
+            val tempAccess = mutableListOf<AccessLogEntry>()
+
+            serverLogs.forEach { log ->
                 try {
-                    val currentLogs = repo.getAccessLogs()
-                    withContext(Dispatchers.Main) { logs = currentLogs }
-                } catch (_: Exception) { /* Bỏ qua lỗi nếu mất kết nối thẻ */ }
+                    val logOwnerName = log.name
+
+                    val time = try {
+                        LocalDateTime.parse(log.time)
+                    } catch (e: Exception) {
+                        LocalDateTime.now()
+                    }
+
+                    val type = log.type
+                    val desc = log.desc
+
+                    // CHỈ XỬ LÝ ACCESS LOGS (không xử lý TOPUP/PAYMENT)
+                    when (type) {
+                        "CHECK_IN", "CHECK_OUT", "RESTRICTED" -> {
+                            val accessType = when (type) {
+                                "CHECK_IN" -> AccessType.CHECK_IN
+                                "CHECK_OUT" -> AccessType.CHECK_OUT
+                                else -> AccessType.RESTRICTED_AREA
+                            }
+                            // Hiển thị tên người sở hữu nếu là Admin
+                            val finalDesc = if (userRole == "ADMIN") "$logOwnerName: $desc" else desc
+                            tempAccess.add(AccessLogEntry(time, accessType, finalDesc))
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                logs = tempAccess.sortedByDescending { it.time }
+                println("[AccessControl] Loaded ${logs.size} access logs from server")
             }
         }
     }
 
     // Kích hoạt tải log ban đầu và khi có yêu cầu làm mới
     LaunchedEffect(userRole, logRefreshKey) {
-        if (userRole != "ADMIN") {
-            loadUserLogs()
-        } else {
-            logs = emptyList() // Admin không hiển thị log thẻ
-        }
+        loadUserLogs() // Load cho cả ADMIN và USER từ server
     }
 
     // Hàm xử lý chung (Được gọi sau khi PIN đã được xác thực thành công ở tầng cha/Dialog)
@@ -208,13 +274,21 @@ fun AccessControlScreen(
 
             // --- HISTORY LIST - Di chuyển lên ngay dưới action buttons ---
             Text(
-                text = if(userRole == "ADMIN") "Log của Admin được lưu trên Server (Xem tại tab Lịch sử)" else "Nhật ký hoạt động trên thẻ",
+                text = if(userRole == "ADMIN") "Nhật ký hoạt động (Toàn hệ thống - Server)" else "Nhật ký hoạt động (Cá nhân - Server)",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (userRole != "ADMIN") {
+            // Hiển thị logs cho cả ADMIN và USER
+            if (logs.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Chưa có dữ liệu", color = Color.Gray)
+                }
+            } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -245,8 +319,7 @@ fun AccessControlScreen(
                         }
                     }
                 }
-            } else {
-                Spacer(Modifier.weight(1f)) // Placeholder cho Admin
+
             }
         }
 
