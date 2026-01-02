@@ -65,6 +65,7 @@ fun CanteenScreen(
 
     var amountText by remember { mutableStateOf("") }
     var isAmountEnabled by remember { mutableStateOf(false) }
+    var showBillPreview by remember { mutableStateOf(false) }
 
     val selectedQuantities = remember { mutableStateMapOf<String, Int>() }
     val quickAmounts = listOf(10_000, 20_000, 50_000, 100_000, 200_000, 500_000)
@@ -141,119 +142,185 @@ fun CanteenScreen(
 
         WalletCard(balanceVersion, userRole)
 
-        Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface)) {
-            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedTextField(
-                    value = amountText,
-                    onValueChange = { if (it.all { c -> c.isDigit() }) amountText = it },
-                    label = { Text("Số tiền giao dịch") },
-                    prefix = { Text("₫ ") },
-                    modifier = Modifier.fillMaxWidth(),
-                    // Logic mới:
-                    readOnly = !isAmountEnabled,
-                    textStyle = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = if (isAmountEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    ),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    trailingIcon = {
-                        // Chỉ hiện nút xóa khi đang ở chế độ nạp tiền
-                        if(amountText.isNotEmpty() && isAmountEnabled) {
-                            IconButton(onClick = { amountText = "" }) { Icon(Icons.Default.Clear, null) }
+        // === CHẾ ĐỘ NẠP TIỀN (isAmountEnabled = true) ===
+        if (isAmountEnabled) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(Color(0xFFFFF3E0))
+            ) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AccountBalanceWallet, null, tint = Color(0xFFFF8F00), modifier = Modifier.size(28.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("CHẾ ĐỘ NẠP TIỀN", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
+                    }
+
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { if (it.all { c -> c.isDigit() }) amountText = it },
+                        label = { Text("Số tiền cần nạp") },
+                        prefix = { Text("₫ ") },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE65100)
+                        ),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        trailingIcon = {
+                            if (amountText.isNotEmpty()) {
+                                IconButton(onClick = { amountText = "" }) { Icon(Icons.Default.Clear, null) }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFFF8F00),
+                            focusedLabelColor = Color(0xFFFF8F00)
+                        )
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Chọn nhanh", style = MaterialTheme.typography.labelMedium, color = Color(0xFFE65100).copy(alpha = 0.7f))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            quickAmounts.take(3).forEach { amt ->
+                                SuggestionChip(
+                                    onClick = { amountText = amt.toString() },
+                                    label = { Text(formatMoney(amt.toDouble()).replace(" ₫", "")) },
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = Color.White,
+                                        labelColor = Color(0xFFE65100)
+                                    )
+                                )
+                            }
                         }
                     }
-                )
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Gợi ý nhanh", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        quickAmounts.take(4).forEach { amt ->
-                            SuggestionChip(
-                                onClick = { amountText = amt.toString() },
-                                label = { Text(formatMoney(amt.toDouble()).replace(" ₫", "")) }
-                            )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                isAmountEnabled = false
+                                amountText = ""
+                            },
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE65100))
+                        ) {
+                            Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Hủy")
+                        }
+
+                        Button(
+                            onClick = {
+                                val amt = amountText.toDoubleOrNull() ?: 0.0
+                                if (amt > 0) {
+                                    scope.launch(Dispatchers.IO) {
+                                        if (userRole != "ADMIN" && repo.isCardLocked()) {
+                                            withContext(Dispatchers.Main) {
+                                                statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thực hiện nạp tiền." to false
+                                            }
+                                            return@launch
+                                        }
+
+                                        isProcessing = true
+                                        val ok = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", amt, "Nạp tiền") else repo.topUp(amt)
+
+                                        withContext(Dispatchers.Main) {
+                                            isProcessing = false
+                                            if (ok) {
+                                                statusMessage = "✅ Đã nạp ${formatMoney(amt)} thành công!" to true
+                                                balanceVersion++
+                                                onBalanceChanged()
+                                                amountText = ""
+                                                isAmountEnabled = false
+                                            } else {
+                                                statusMessage = "❌ Nạp tiền thất bại!" to false
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            enabled = !isProcessing && amountText.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF8F00))
+                        ) {
+                            if (isProcessing) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
+                            } else {
+                                Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Xác nhận nạp", color = Color.White)
+                            }
                         }
                     }
                 }
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = {
-                            if (!isAmountEnabled) {
-                                // Hiệu ứng: Nếu đang khóa thì bấm lần 1 để mở khóa field nhập tiền
-                                isAmountEnabled = true
-                                amountText = ""
-                                selectedQuantities.clear()
-                                return@Button
+            }
+        }
+        // === CHẾ ĐỘ THANH TOÁN (isAmountEnabled = false) ===
+        else {
+            // Hiển thị tổng tiền thanh toán nếu có
+            val totalAmount = amountText.toIntOrNull() ?: 0
+            if (totalAmount > 0) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(Color(0xFFE8F5E9))
+                ) {
+                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Tổng tiền thanh toán", style = MaterialTheme.typography.labelLarge, color = Color(0xFF1B5E20).copy(alpha = 0.7f))
+                                Text(formatMoney(totalAmount.toDouble()), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
                             }
-                            val amt = amountText.toDoubleOrNull() ?: 0.0
-                            if (amt > 0) {
-                                scope.launch(Dispatchers.IO) {
-                                    // 🔥 KIỂM TRA KHÓA TRƯỚC KHI NẠP
-                                    if (userRole != "ADMIN" && repo.isCardLocked()) {
-                                        withContext(Dispatchers.Main) {
-                                            statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thực hiện nạp tiền." to false
-                                        }
-                                        return@launch
-                                    }
+                            Icon(Icons.Default.ShoppingCart, null, modifier = Modifier.size(40.dp), tint = Color(0xFF2E7D32).copy(alpha = 0.6f))
+                        }
 
-                                    isProcessing = true
-                                    val ok = if (userRole == "ADMIN") repo.adminTransaction("ADMIN01", amt, "Nạp tiền") else repo.topUp(amt)
-
-                                    withContext(Dispatchers.Main) {
-                                        isProcessing = false
-                                        if (ok) {
-                                            statusMessage = "Đã nạp ${formatMoney(amt)} thành công!" to true
-                                            balanceVersion++
-                                            onBalanceChanged()
-                                            amountText = ""
-                                            isAmountEnabled = false
-                                        } else {
-                                            statusMessage = "❌ Nạp tiền thất bại!" to false
-                                        }
-                                    }
-                                }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    isAmountEnabled = true
+                                    amountText = ""
+                                    selectedQuantities.clear()
+                                },
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF8F00))
+                            ) {
+                                Icon(Icons.Default.AccountBalanceWallet, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Nạp tiền")
                             }
-                        },
-                        modifier = Modifier.weight(1f).height(50.dp),
-                        enabled = !isProcessing && amountText.isNotEmpty()
-                    ) {
-                        Text("Nạp tiền")
+
+                            Button(
+                                onClick = {
+                                    showBillPreview = true
+                                },
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                enabled = !isProcessing,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            ) {
+                                Icon(Icons.Default.Payment, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Thanh toán", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
-
-                    Button(
-                        onClick = {
-                            isAmountEnabled = false
-                            val amt = amountText.toDoubleOrNull() ?: 0.0
-                            if (amt > 0) {
-                                isAmountEnabled = false
-                                scope.launch(Dispatchers.IO) {
-                                    // 🔥 KIỂM TRA KHÓA TRƯỚC KHI THANH TOÁN
-                                    if (userRole != "ADMIN" && repo.isCardLocked()) {
-                                        withContext(Dispatchers.Main) {
-                                            statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thanh toán." to false
-                                        }
-                                        return@launch
-                                    }
-
-                                    withContext(Dispatchers.Main) {
-                                        if (userRole == "ADMIN") {
-                                            showAdminPinDialog = true
-                                            adminPin = ""
-                                            adminPinError = null
-                                        } else {
-                                            onRequirePin { performPayment(amt) }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f).height(50.dp),
-                        enabled = !isProcessing && amountText.isNotEmpty() && !isAmountEnabled,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                    ) {
-                        Text("Thanh toán", color = Color.White)
-                    }
+                }
+            } else {
+                // Nếu chưa có tổng tiền, chỉ hiển thị nút nạp tiền
+                Button(
+                    onClick = {
+                        isAmountEnabled = true
+                        amountText = ""
+                        selectedQuantities.clear()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF8F00))
+                ) {
+                    Icon(Icons.Default.AccountBalanceWallet, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Nạp tiền", color = Color.White)
                 }
             }
         }
@@ -271,22 +338,120 @@ fun CanteenScreen(
             }
         }
 
-        if (isLoadingProducts) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        } else ProductSection(
-            products = dynamicProducts,
-            quantities = selectedQuantities,
-            onTotalAmountChange = { total ->
-                amountText = total.toString()
-                // Nếu có chọn món (tổng > 0), tự động khóa field nhập tiền
-                if (total > 0) {
-                    isAmountEnabled = false
+        // Hiển thị ProductSection hoặc thông báo
+        if (!isAmountEnabled) {
+            if (isLoadingProducts) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            } else {
+                ProductSection(
+                    products = dynamicProducts,
+                    quantities = selectedQuantities,
+                    onTotalAmountChange = { total ->
+                        amountText = total.toString()
+                    }
+                )
+            }
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(Color(0xFFFFF3E0).copy(alpha = 0.5f))
+            ) {
+                Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Info, null, modifier = Modifier.size(40.dp), tint = Color(0xFFFF8F00).copy(alpha = 0.7f))
+                        Text("Chế độ nạp tiền đang được kích hoạt", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFE65100), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
+                        Text("Vui lòng hoàn tất hoặc hủy để tiếp tục mua hàng", style = MaterialTheme.typography.bodySmall, color = Color(0xFFE65100).copy(alpha = 0.7f), textAlign = TextAlign.Center)
+                    }
+                }
+            }
+        }
+    }
+
+    // --- DIALOG XEM BILL TRƯỚC KHI THANH TOÁN ---
+    if (showBillPreview) {
+        val previewItems = dynamicProducts
+            .filter { (selectedQuantities[it.name] ?: 0) > 0 }
+            .map { it to (selectedQuantities[it.name] ?: 0) }
+        val totalPreview = if (previewItems.isEmpty()) {
+            amountText.toIntOrNull() ?: 0
+        } else {
+            previewItems.sumOf { it.first.price * it.second }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showBillPreview = false },
+            icon = { Icon(Icons.Default.Receipt, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Xác nhận đơn hàng", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Vui lòng kiểm tra thông tin trước khi thanh toán:", style = MaterialTheme.typography.bodyMedium)
+                    HorizontalDivider()
+                    
+                    if (previewItems.isNotEmpty()) {
+                        previewItems.forEach { (item, qty) ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(item.name, fontWeight = FontWeight.Medium)
+                                    Text("${formatMoney(item.price.toDouble())} x $qty", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(formatMoney((item.price * qty).toDouble()), fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                        }
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Thanh toán dịch vụ", modifier = Modifier.weight(1f))
+                            Text(formatMoney(totalPreview.toDouble()), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("TỔNG CỘNG", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Text(formatMoney(totalPreview.toDouble()), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = Color(0xFF2E7D32))
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBillPreview = false
+                        val amt = amountText.toDoubleOrNull() ?: 0.0
+                        scope.launch(Dispatchers.IO) {
+                            if (userRole != "ADMIN" && repo.isCardLocked()) {
+                                withContext(Dispatchers.Main) {
+                                    statusMessage = "❌ THẺ ĐÃ BỊ KHÓA! Không thể thanh toán." to false
+                                }
+                                return@launch
+                            }
+
+                            withContext(Dispatchers.Main) {
+                                if (userRole == "ADMIN") {
+                                    showAdminPinDialog = true
+                                    adminPin = ""
+                                    adminPinError = null
+                                } else {
+                                    onRequirePin { performPayment(amt) }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Lock, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Xác nhận & Nhập PIN")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBillPreview = false }) {
+                    Text("Quay lại")
                 }
             }
         )
     }
 
-    // --- DIALOG HÓA ĐƠN ---
+    // --- DIALOG HÓA ĐƠN SAU KHI THANH TOÁN THÀNH CÔNG ---
     if (showReceipt) {
         AlertDialog(
             onDismissRequest = { },
