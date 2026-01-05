@@ -553,23 +553,78 @@ class SmartCardRepositoryImpl(
     }
 
     override fun pay(amount: Double, description: String): Boolean {
+        // 1. Chuẩn bị dữ liệu gửi xuống thẻ
         val amtInt = amount.toInt()
         val amountBytes = ByteBuffer.allocate(4).putInt(amtInt).array()
+
+        // Lấy timestamp (giây)
         val now = LocalDateTime.now()
-        val timeBytes = ByteBuffer.allocate(4).putInt(now.toEpochSecond(ZoneOffset.UTC).toInt()).array()
+        val timeSec = now.toEpochSecond(ZoneOffset.UTC).toInt()
+        val timeBytes = ByteBuffer.allocate(4).putInt(timeSec).array()
+
+        // Sinh Nonce ngẫu nhiên (4 bytes)
         val unBytes = ByteArray(4).apply { SecureRandom().nextBytes(this) }
+
+        // Payload gửi đi: [Amount] [Time] [Nonce]
         val payData = amountBytes + timeBytes + unBytes
 
-        // Lệnh INS_WALLET_PAY (0x51) trừ tiền trên thẻ (Được giữ lại)
+        // 2. Gửi lệnh thanh toán (INS_WALLET_PAY)
         val apdu = byteArrayOf(0x80.toByte(), INS_WALLET_PAY, 0x00, 0x00, payData.size.toByte()) + payData
         val resp = api.sendApdu(apdu)
+
+        // Kiểm tra lỗi APDU cơ bản
         if (!isSw9000(resp)) return false
 
+        // 3. Lấy chữ ký từ phản hồi của thẻ
+        val signature = dataPart(resp)
         val newBalance = getBalanceRaw()
-        // 🔥 VÔ HIỆU HÓA: Ghi Log Transaction PAYMENT vào Thẻ
-        // sendAddLog(encodeTxLogPayload(KIND_TX, SUB_TX_PAYMENT, now, amtInt, newBalance, description))
 
-        val sigHex = bytesToHex(dataPart(resp))
+        try {
+            // Bước A: Lấy Public Key của thẻ
+            val publicKey = getPublicKeyFromCard()
+            if (publicKey == null) {
+                println("❌ Thanh toán thất bại: Không lấy được Public Key để xác thực.")
+                return false
+            }
+
+            // Bước B: Lấy ID của thẻ (Để tái tạo dữ liệu gốc)
+            val cardId = getCardID() // Hàm này trả về 16 bytes ID
+            if (cardId.isEmpty()) {
+                println("❌ Thanh toán thất bại: Không đọc được ID thẻ.")
+                return false
+            }
+
+            // Bước C: Tái tạo dữ liệu gốc mà thẻ đã ký
+            // Cấu trúc trong Applet: [ID (16)] + [Amount (4)] + [Time (4)] + [Nonce (4)]
+            val signedData = ByteBuffer.allocate(16 + 4 + 4 + 4)
+                .put(cardId)      // ID
+                .put(amountBytes) // Số tiền (khớp với dữ liệu gửi đi)
+                .put(timeBytes)   // Thời gian (khớp với dữ liệu gửi đi)
+                .put(unBytes)     // Nonce (khớp với dữ liệu gửi đi)
+                .array()
+
+            // Bước D: Thực hiện Verify
+            // Applet dùng ALG_RSA_SHA_PKCS1 -> Tương ứng "SHA1withRSA" trong Java
+            val verifier = Signature.getInstance("SHA1withRSA")
+            verifier.initVerify(publicKey)
+            verifier.update(signedData)
+
+            val isVerified = verifier.verify(signature)
+
+            if (!isVerified) {
+                println("🚨 CẢNH BÁO: Chữ ký thanh toán KHÔNG HỢP LỆ! Có thể là thẻ giả mạo hoặc dữ liệu bị can thiệp.")
+                return false
+            }
+
+            println("✅ Xác thực chữ ký thanh toán thành công (Local Verify).")
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            println("❌ Lỗi trong quá trình xác thực chữ ký: ${e.message}")
+            return false
+        }
+        // 4. Gửi Log lên Server
+        val sigHex = bytesToHex(signature)
         val uuid = runBlocking { getCardIDHex() }
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -579,6 +634,7 @@ class SmartCardRepositoryImpl(
                 }
             } catch (_: Exception){}
         }
+
         return true
     }
 
