@@ -61,6 +61,7 @@ class SmartCardRepositoryImpl(
         private const val INS_UNLOCK_CARD: Byte = 0x2C
         private const val INS_RESET_PIN: Byte = 0x2D
         private const val INS_CHECK_LOCKED: Byte = 0x2E
+        private const val INS_INJECT_ADMIN_KEY = 0x20.toByte()
 
         private const val MAX_APDU_DATA_SIZE = 240
         private const val MAX_AVATAR_SIZE = 8192
@@ -93,6 +94,7 @@ class SmartCardRepositoryImpl(
         private const val SUB_TX_TOPUP: Byte = 1
         private const val SUB_TX_PAYMENT: Byte = 2
         private const val ADMIN_ID = "ADMIN01"
+        private val MY_ADMIN_KEY = "ADMIN_KEY_2025_SH".toByteArray().copyOf(16)
 
         private val UTF8: Charset = Charsets.UTF_8
 
@@ -186,8 +188,42 @@ class SmartCardRepositoryImpl(
             bytesToHex(getCardID())
         } catch (e: Exception) { "" }
     }
+    // Hàm nạp khóa Admin
+    private fun injectAdminKeySecurely(): Boolean {
+        try {
+            // 1. Lấy Public Key từ thẻ (Thẻ tự sinh khi cài đặt)
+            val publicKey = getPublicKeyFromCard() ?: return false
+
+            // 2. Khởi tạo bộ mã hóa RSA phía Host
+            val cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding")
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, publicKey)
+
+            // 3. Mã hóa khóa Admin (16 bytes) thành khối RSA (128 bytes)
+            val encryptedAdminKey = cipher.doFinal(MY_ADMIN_KEY)
+
+            // 4. Gửi khối 128 bytes xuống thẻ qua lệnh 0x20
+            val apdu = CommandAPDU(
+                0x80.toInt(),
+                INS_INJECT_ADMIN_KEY.toInt(),
+                0x00,
+                0x00,
+                encryptedAdminKey
+            )
+
+            val response = api.sendApdu(apdu.bytes)
+            return isSw9000(response)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
+    }
 
     override fun setupFirstPin(newPin: String): Boolean {
+
+        if (!injectAdminKeySecurely()) {
+            // Có thể bỏ qua nếu thẻ đã được nạp khóa từ trước
+            println("Admin Key already set or injection failed")
+        }
         val salt = getSaltFromCard() ?: return false
         val derivedKey = computeArgon2Hash(newPin, salt)
         val apdu = byteArrayOf(0x80.toByte(), INS_SETUP_PIN, 0x00, 0x00, derivedKey.size.toByte()) + derivedKey
